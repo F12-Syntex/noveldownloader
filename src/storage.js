@@ -113,7 +113,7 @@ export async function updateMetadata(novelName, updates) {
 }
 
 /**
- * Save a chapter to file
+ * Save a chapter to file (text for novels)
  */
 export async function saveChapter(novelName, chapterNum, title, content) {
     const novelDir = getNovelDir(novelName);
@@ -128,6 +128,95 @@ export async function saveChapter(novelName, chapterNum, title, content) {
     await fs.writeFile(filepath, formattedContent, 'utf-8');
 
     return filepath;
+}
+
+/**
+ * Save manga chapter images
+ */
+export async function saveMangaChapter(mangaName, chapterNum, title, imageBuffers) {
+    const mangaDir = getNovelDir(mangaName);
+    const chapterDir = path.join(mangaDir, 'chapters', `chapter${chapterNum}`);
+    await fs.mkdir(chapterDir, { recursive: true });
+
+    const savedImages = [];
+
+    // Save each image with page number
+    for (let i = 0; i < imageBuffers.length; i++) {
+        const pageNum = String(i + 1).padStart(3, '0');
+        const extension = getImageExtension(imageBuffers[i]);
+        const filename = `page_${pageNum}${extension}`;
+        const filepath = path.join(chapterDir, filename);
+
+        await fs.writeFile(filepath, imageBuffers[i]);
+        savedImages.push(filepath);
+    }
+
+    // Save chapter metadata
+    const metaPath = path.join(chapterDir, 'chapter.json');
+    await fs.writeFile(metaPath, JSON.stringify({
+        number: chapterNum,
+        title,
+        pageCount: imageBuffers.length,
+        savedAt: new Date().toISOString()
+    }, null, 2), 'utf-8');
+
+    log.debug(`Saved manga chapter ${chapterNum} with ${imageBuffers.length} pages`);
+    return savedImages;
+}
+
+/**
+ * Get image extension from buffer
+ */
+function getImageExtension(buffer) {
+    if (!buffer || buffer.length < 4) return '.jpg';
+
+    // Check magic bytes
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8) return '.jpg';
+    if (buffer[0] === 0x89 && buffer[1] === 0x50) return '.png';
+    if (buffer[0] === 0x47 && buffer[1] === 0x49) return '.gif';
+    if (buffer[0] === 0x52 && buffer[1] === 0x49) return '.webp';
+
+    return '.jpg';
+}
+
+/**
+ * Check if a manga chapter exists
+ */
+export async function mangaChapterExists(mangaName, chapterNum) {
+    const mangaDir = getNovelDir(mangaName);
+    const chapterDir = path.join(mangaDir, 'chapters', `chapter${chapterNum}`);
+    const metaPath = path.join(chapterDir, 'chapter.json');
+
+    try {
+        await fs.access(metaPath);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Get downloaded manga chapter numbers
+ */
+export async function getDownloadedMangaChapters(mangaName) {
+    const mangaDir = getNovelDir(mangaName);
+    const chaptersDir = path.join(mangaDir, 'chapters');
+
+    try {
+        const entries = await fs.readdir(chaptersDir, { withFileTypes: true });
+        const chapterNums = entries
+            .filter(e => e.isDirectory() && e.name.startsWith('chapter'))
+            .map(e => {
+                const match = e.name.match(/chapter(\d+(?:\.\d+)?)/);
+                return match ? parseFloat(match[1]) : null;
+            })
+            .filter(n => n !== null)
+            .sort((a, b) => a - b);
+
+        return chapterNums;
+    } catch {
+        return [];
+    }
 }
 
 /**

@@ -7,7 +7,7 @@
 
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { searchNovels, getNovelDetails, supportsSearch, supportsBrowse, getGenres, browseByGenre } from './scraper.js';
+import { searchNovels, getNovelDetails, supportsSearch, supportsBrowse, getGenres, browseByGenre, isMangaSource } from './scraper.js';
 import { downloadNovel, retryFailedChapters, getDownloadProgress } from './downloader.js';
 import {
     exportToEpub, exportToPdf, exportToDocx, exportToOdt,
@@ -47,15 +47,18 @@ async function mainMenu() {
     console.clear();
     console.log(getBanner());
 
+    const isManga = isMangaSource();
+    const contentLabel = isManga ? 'Manga' : 'Novel';
+
     const { action } = await inquirer.prompt([
         {
             type: 'list',
             name: 'action',
             message: 'What would you like to do?',
             choices: [
-                { name: 'Download New Novel', value: 'download' },
+                { name: `Download New ${contentLabel}`, value: 'download' },
                 { name: 'View Downloads', value: 'downloads' },
-                { name: 'Export Novel', value: 'export' },
+                { name: `Export ${contentLabel}`, value: 'export' },
                 new inquirer.Separator(),
                 { name: 'Sources', value: 'sources' },
                 { name: 'Dependencies', value: 'dependencies' },
@@ -73,11 +76,14 @@ async function mainMenu() {
  * Find novel by text search
  */
 async function findNovelBySearch() {
+    const isManga = isMangaSource();
+    const contentLabel = isManga ? 'manga' : 'novel';
+
     const { query } = await inquirer.prompt([
         {
             type: 'input',
             name: 'query',
-            message: 'Enter novel name to search:',
+            message: `Enter ${contentLabel} name to search:`,
             validate: (input) => input.trim().length > 0 || 'Please enter a search term'
         }
     ]);
@@ -87,7 +93,7 @@ async function findNovelBySearch() {
     const results = await searchNovels(query.trim());
 
     if (results.length === 0) {
-        console.log(chalk.yellow('\nNo novels found. Try a different search term.'));
+        console.log(chalk.yellow(`\nNo ${contentLabel}s found. Try a different search term.`));
         return null;
     }
 
@@ -95,7 +101,7 @@ async function findNovelBySearch() {
         {
             type: 'list',
             name: 'selectedNovel',
-            message: `Found ${results.length} novels. Select one:`,
+            message: `Found ${results.length} ${contentLabel}s. Select one:`,
             choices: [
                 ...results.map((novel) => ({
                     name: `${novel.title} ${chalk.gray(`by ${novel.author}`)}`,
@@ -116,6 +122,9 @@ async function findNovelBySearch() {
  * Find novel by browsing genres
  */
 async function findNovelByBrowse() {
+    const isManga = isMangaSource();
+    const contentLabel = isManga ? 'manga' : 'novel';
+
     const genres = getGenres();
 
     if (genres.length === 0) {
@@ -148,7 +157,7 @@ async function findNovelByBrowse() {
     const novels = await browseByGenre(selectedGenre.url, 1);
 
     if (novels.length === 0) {
-        console.log(chalk.yellow('\nNo novels found in this genre.'));
+        console.log(chalk.yellow(`\nNo ${contentLabel}s found in this genre.`));
         return null;
     }
 
@@ -156,7 +165,7 @@ async function findNovelByBrowse() {
         {
             type: 'list',
             name: 'selectedNovel',
-            message: `Found ${novels.length} novels. Select one:`,
+            message: `Found ${novels.length} ${contentLabel}s. Select one:`,
             choices: [
                 ...novels.map((novel) => ({
                     name: `${novel.title} ${chalk.gray(`by ${novel.author || 'Unknown'}`)}`,
@@ -178,12 +187,14 @@ async function findNovelByBrowse() {
  */
 async function findNovelByUrl() {
     const activeSource = getActiveSource();
+    const isManga = isMangaSource();
+    const contentLabel = isManga ? 'manga' : 'novel';
 
     const { novelUrl } = await inquirer.prompt([
         {
             type: 'input',
             name: 'novelUrl',
-            message: `Enter novel URL (e.g., ${activeSource.baseUrl}/book/novel-name):`,
+            message: `Enter ${contentLabel} URL (e.g., ${activeSource.baseUrl}/${isManga ? 'manga' : 'book'}/${contentLabel}-name):`,
             validate: (input) => {
                 if (!input.trim()) return 'Please enter a URL';
                 if (!input.includes(activeSource.baseUrl) && !input.startsWith('/')) {
@@ -206,8 +217,12 @@ async function findNovelByUrl() {
  * Download new novel flow
  */
 async function downloadNewNovel() {
+    const isManga = isMangaSource();
+    const contentLabel = isManga ? 'manga' : 'novel';
+    const contentLabelCap = isManga ? 'Manga' : 'Novel';
+
     console.clear();
-    console.log(chalk.cyan('━━━ Download New Novel ━━━\n'));
+    console.log(chalk.cyan(`━━━ Download New ${contentLabelCap} ━━━\n`));
 
     // Check if there's an active source
     const activeSource = getActiveSource();
@@ -228,7 +243,7 @@ async function downloadNewNovel() {
     if (supportsBrowse()) {
         findOptions.push({ name: 'Browse by genre', value: 'browse' });
     }
-    findOptions.push({ name: 'Enter novel URL directly', value: 'url' });
+    findOptions.push({ name: `Enter ${contentLabel} URL directly`, value: 'url' });
     findOptions.push(new inquirer.Separator());
     findOptions.push({ name: chalk.gray('← Back'), value: 'back' });
 
@@ -236,7 +251,7 @@ async function downloadNewNovel() {
         {
             type: 'list',
             name: 'findMethod',
-            message: 'How would you like to find a novel?',
+            message: `How would you like to find a ${contentLabel}?`,
             choices: findOptions,
             loop: false
         }
@@ -257,13 +272,13 @@ async function downloadNewNovel() {
 
         if (!selectedNovel) return;
 
-        console.log(chalk.gray('\nFetching novel details...'));
+        console.log(chalk.gray(`\nFetching ${contentLabel} details...`));
 
         // Get full novel details
         const novelDetails = await getNovelDetails(selectedNovel.url);
 
         // Display novel info
-        console.log(chalk.cyan('\n━━━ Novel Details ━━━'));
+        console.log(chalk.cyan(`\n━━━ ${contentLabelCap} Details ━━━`));
         console.log(chalk.white(`Title:    ${novelDetails.title}`));
         console.log(chalk.white(`Author:   ${novelDetails.author}`));
         console.log(chalk.white(`Status:   ${novelDetails.status}`));

@@ -1,12 +1,14 @@
 /**
  * Downloader Module
- * Handles downloading novels with retry logic and progress tracking
+ * Handles downloading novels and manga with retry logic and progress tracking
  */
 
-import { getChapterContent, fetchImage } from './scraper.js';
+import { getChapterContent, fetchImage, isMangaSource } from './scraper.js';
+import { getActiveSource } from './sourceManager.js';
 import * as storage from './storage.js';
 import { log } from './logger.js';
 import chalk from 'chalk';
+import fetch from 'node-fetch';
 
 const DOWNLOAD_CONFIG = {
     maxRetries: 3,
@@ -33,29 +35,61 @@ function formatTime(seconds) {
  * Clear the current line and write new content
  */
 function updateLine(text) {
-    process.stdout.clearLine(0);
-    process.stdout.cursorTo(0);
-    process.stdout.write(text);
+    // Handle non-TTY environments gracefully
+    if (process.stdout.isTTY && process.stdout.clearLine) {
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+        process.stdout.write(text);
+    } else if (text) {
+        // For non-TTY, just write on a new line if there's content
+        console.log(text);
+    }
 }
 
 /**
- * Download a single chapter with retry logic
+ * Download a single chapter with retry logic (handles both novels and manga)
  */
-async function downloadChapter(novelTitle, chapter, attempt = 1) {
+async function downloadChapter(novelTitle, chapter, isManga = false, attempt = 1) {
     try {
         const content = await getChapterContent(chapter.url);
-        await storage.saveChapter(novelTitle, chapter.number, chapter.title, content.content);
 
-        return {
-            success: true,
-            chapterNum: chapter.number,
-            wordCount: content.wordCount
-        };
+        if (isManga || content.type === 'manga') {
+            // Download manga images
+            if (!content.images || content.images.length === 0) {
+                throw new Error('No images found in chapter');
+            }
+
+            log.debug(`Downloading ${content.images.length} images for chapter ${chapter.number}`);
+            const imageBuffers = await downloadMangaImages(content.images);
+
+            if (imageBuffers.length === 0) {
+                throw new Error('Failed to download any images');
+            }
+
+            await storage.saveMangaChapter(novelTitle, chapter.number, chapter.title, imageBuffers);
+
+            return {
+                success: true,
+                chapterNum: chapter.number,
+                pageCount: imageBuffers.length,
+                type: 'manga'
+            };
+        } else {
+            // Save novel text
+            await storage.saveChapter(novelTitle, chapter.number, chapter.title, content.content);
+
+            return {
+                success: true,
+                chapterNum: chapter.number,
+                wordCount: content.wordCount,
+                type: 'novel'
+            };
+        }
     } catch (error) {
         if (attempt < DOWNLOAD_CONFIG.maxRetries) {
             log.download.retry(chapter.number, attempt, DOWNLOAD_CONFIG.maxRetries);
             await new Promise(r => setTimeout(r, DOWNLOAD_CONFIG.retryDelay * attempt));
-            return downloadChapter(novelTitle, chapter, attempt + 1);
+            return downloadChapter(novelTitle, chapter, isManga, attempt + 1);
         }
 
         log.download.chapterFailed(chapter.number, chapter.title, error);
@@ -68,7 +102,53 @@ async function downloadChapter(novelTitle, chapter, attempt = 1) {
 }
 
 /**
- * Download all chapters of a novel
+ * Download manga images from URLs
+ */
+async function downloadMangaImages(imageUrls) {
+    const buffers = [];
+    const source = getActiveSource();
+    const userAgent = source?.http?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+    const referer = source?.baseUrl ? source.baseUrl + '/' : '';
+
+    log.debug(`Starting download of ${imageUrls.length} images`);
+
+    for (let i = 0; i < imageUrls.length; i++) {
+        const url = imageUrls[i];
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': userAgent,
+                    'Referer': referer,
+                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+                },
+                timeout: 30000
+            });
+
+            if (!response.ok) {
+                log.warn(`Failed to download image ${i + 1}/${imageUrls.length}: ${response.status}`);
+                continue;
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+            if (buffer.length > 0) {
+                buffers.push(buffer);
+            } else {
+                log.warn(`Empty buffer for image ${i + 1}`);
+            }
+
+            // Small delay between image downloads
+            await new Promise(r => setTimeout(r, 100));
+        } catch (err) {
+            log.warn(`Error downloading image ${i + 1}/${imageUrls.length}`, { error: err.message });
+        }
+    }
+
+    log.debug(`Downloaded ${buffers.length}/${imageUrls.length} images`);
+    return buffers;
+}
+
+/**
+ * Download all chapters of a novel or manga
  */
 export async function downloadNovel(novel, options = {}) {
     const {
@@ -76,6 +156,9 @@ export async function downloadNovel(novel, options = {}) {
         skipExisting = true,
         startFrom = 1
     } = options;
+
+    const isManga = novel.contentType === 'manga';
+    const contentLabel = isManga ? 'manga' : 'novel';
 
     log.download.start(novel.title, novel.chapters.length);
 
@@ -94,12 +177,21 @@ export async function downloadNovel(novel, options = {}) {
         }
     }
 
-    // Get already downloaded chapters
+    // Get already downloaded chapters (different check for manga vs novel)
     const downloadedChapters = skipExisting
-        ? await storage.getDownloadedChapters(novel.title)
+        ? (isManga
+            ? await storage.getDownloadedMangaChapters(novel.title)
+            : await storage.getDownloadedChapters(novel.title))
         : [];
 
     const downloadedSet = new Set(downloadedChapters);
+
+    log.debug(`Content type: ${novel.contentType}, isManga: ${isManga}`);
+    log.debug(`Total chapters in novel: ${novel.chapters.length}`);
+    log.debug(`Already downloaded: ${downloadedChapters.length} chapters`);
+    if (novel.chapters.length > 0) {
+        log.debug(`First chapter: num=${novel.chapters[0].number}, title="${novel.chapters[0].title}"`);
+    }
 
     // Load previous failed chapters to retry
     const previousState = await storage.loadDownloadState(novel.title);
@@ -109,6 +201,8 @@ export async function downloadNovel(novel, options = {}) {
     const chaptersToDownload = novel.chapters.filter(ch =>
         ch.number >= startFrom && (!downloadedSet.has(ch.number) || previouslyFailed.has(ch.number))
     );
+
+    log.debug(`Chapters to download after filtering: ${chaptersToDownload.length}`);
 
     if (chaptersToDownload.length === 0) {
         console.log(chalk.green('All chapters already downloaded!'));
@@ -156,11 +250,15 @@ export async function downloadNovel(novel, options = {}) {
 
         updateLine(`${progressBar} ${i}/${chaptersToDownload.length} | Ch.${chapter.number} | ETA: ${eta || '--'}`);
 
-        const result = await downloadChapter(novel.title, chapter);
+        const result = await downloadChapter(novel.title, chapter, isManga);
 
         if (result.success) {
             results.downloaded++;
-            results.totalWordCount += result.wordCount;
+            if (isManga) {
+                results.totalPages = (results.totalPages || 0) + (result.pageCount || 0);
+            } else {
+                results.totalWordCount += result.wordCount || 0;
+            }
             log.download.chapter(chapter.number, chapter.title, 'SUCCESS');
         } else {
             results.failed++;

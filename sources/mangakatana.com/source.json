@@ -1,0 +1,128 @@
+{
+    "name": "MangaKatana",
+    "id": "mangakatana.com",
+    "baseUrl": "https://mangakatana.com",
+    "enabled": true,
+    "version": "1.0.0",
+    "contentType": "manga",
+
+    "http": {
+        "timeout": 20000,
+        "retryAttempts": 3,
+        "retryDelay": 1000,
+        "rateLimit": 500,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    },
+
+    "search": {
+        "url": "{baseUrl}/?search={query}&search_by=book_name",
+        "resultSelector": ".item, #book_list .item, .uk-grid > div",
+        "fields": {
+            "title": {
+                "selector": "h3 a, .title a, .text a",
+                "attribute": "text"
+            },
+            "url": {
+                "selector": "h3 a, .title a, .text a, a[href*='/manga/']",
+                "attribute": "href"
+            },
+            "author": {
+                "selector": ".author, .meta a[href*='/author/']",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "cover": {
+                "selector": "img",
+                "attribute": "src"
+            },
+            "status": {
+                "selector": ".status, .Completed, .Ongoing",
+                "attribute": "text"
+            }
+        }
+    },
+
+    "mangaDetails": {
+        "fields": {
+            "title": {
+                "selector": "h1.heading, h1, .info h1",
+                "attribute": "text"
+            },
+            "cover": {
+                "selector": ".cover img, .info .cover img, #single_book img",
+                "attribute": "src"
+            },
+            "author": {
+                "selector": "a[href*='/author/']",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "artist": {
+                "selector": "a[href*='/author/']",
+                "attribute": "text",
+                "multiple": true
+            },
+            "genres": {
+                "selector": "a[href*='/genre/']",
+                "attribute": "text",
+                "multiple": true
+            },
+            "status": {
+                "selector": ".info .status, .value:contains('Completed'), .value:contains('Ongoing'), td:contains('Completed'), td:contains('Ongoing')",
+                "attribute": "text",
+                "transform": "status"
+            },
+            "description": {
+                "selector": ".summary p, .description, .info p, .synopsis",
+                "attribute": "text"
+            }
+        }
+    },
+
+    "chapterList": {
+        "containerSelector": ".chapters tr a, table.chapters a, .chapter-list a",
+        "fields": {
+            "title": {
+                "attribute": "text"
+            },
+            "url": {
+                "attribute": "href"
+            }
+        },
+        "chapterNumberPattern": "chapter[\\s:-]*(\\d+(?:\\.\\d+)?)",
+        "chapterNumberUrlPattern": "/c(\\d+(?:\\.\\d+)?)",
+        "pagination": {
+            "type": "none"
+        }
+    },
+
+    "chapterContent": {
+        "type": "images",
+        "titleSelectors": [
+            "h1",
+            ".chapter-title",
+            ".breadcrumb li:last-child"
+        ],
+        "imageContainer": "#imgs, .wrap_img, .reading-content",
+        "imageSelectors": [
+            "img.page-image",
+            "#imgs img",
+            ".wrap_img img"
+        ],
+        "imageAttribute": "data-src",
+        "imageAttributeFallback": "src",
+        "scriptArrayPattern": "var\\s+thzq\\s*=\\s*\\[([^\\]]+)\\]",
+        "scriptArrayPatternAlt": "thzq\\s*=\\s*\\['([^']+)'",
+        "removeSelectors": [
+            "script",
+            ".ads",
+            "[class*='ads']"
+        ]
+    },
+
+    "notes": {
+        "contentType": "This is a manga source - chapters contain images instead of text.",
+        "imageLoading": "Images are lazy-loaded and URLs may be stored in JavaScript arrays.",
+        "export": "Manga can be exported to CBZ (comic book archive) or PDF format."
+    }
+}

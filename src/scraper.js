@@ -162,6 +162,24 @@ function extractMultipleFields($, container, fieldConfig, baseUrl) {
 }
 
 /**
+ * Check if the source is a manga source
+ */
+export function isMangaSource(source = null) {
+    source = source || getActiveSource();
+    if (!source) return false;
+    return source.contentType === 'manga';
+}
+
+/**
+ * Get the content type of the source
+ */
+export function getContentType(source = null) {
+    source = source || getActiveSource();
+    if (!source) return 'novel';
+    return source.contentType || 'novel';
+}
+
+/**
  * Check if the source supports text-based search
  */
 export function supportsSearch(source = null) {
@@ -313,15 +331,15 @@ function parseChaptersFromPage($, source) {
         if (!chTitle) chTitle = $a.text().trim();
         if (!chTitle) return;
 
-        // Extract chapter number
+        // Extract chapter number (use parseFloat to support decimal chapters like 1.5)
         let num = null;
         if (chapterConfig.chapterNumberPattern) {
             const titleMatch = chTitle.match(new RegExp(chapterConfig.chapterNumberPattern, 'i'));
-            if (titleMatch) num = parseInt(titleMatch[1]);
+            if (titleMatch) num = parseFloat(titleMatch[1]);
         }
         if (num === null && chapterConfig.chapterNumberUrlPattern) {
             const urlMatch = chUrl.match(new RegExp(chapterConfig.chapterNumberUrlPattern, 'i'));
-            if (urlMatch) num = parseInt(urlMatch[1]);
+            if (urlMatch) num = parseFloat(urlMatch[1]);
         }
 
         chapters.push({
@@ -376,7 +394,7 @@ function getTotalPages($, source) {
 }
 
 /**
- * Get full novel details including all chapters
+ * Get full novel/manga details including all chapters
  */
 export async function getNovelDetails(novelUrl, source = null) {
     source = source || getActiveSource();
@@ -384,12 +402,17 @@ export async function getNovelDetails(novelUrl, source = null) {
         throw new Error('No active source configured');
     }
 
-    log.debug(`Fetching novel details from: ${novelUrl}`);
+    const isManga = isMangaSource(source);
+    log.debug(`Fetching ${isManga ? 'manga' : 'novel'} details from: ${novelUrl}`);
 
     const html = await fetchPage(novelUrl, source);
     const $ = cheerio.load(html);
 
-    const detailsConfig = source.novelDetails;
+    // Use mangaDetails config for manga sources, novelDetails for novels
+    const detailsConfig = isManga ? source.mangaDetails : source.novelDetails;
+    if (!detailsConfig) {
+        throw new Error(`No ${isManga ? 'mangaDetails' : 'novelDetails'} configuration found for source`);
+    }
     const details = {};
 
     // Extract each field from configuration
@@ -476,10 +499,12 @@ export async function getNovelDetails(novelUrl, source = null) {
         url: novelUrl,
         cover: details.cover,
         author: details.author || 'Unknown',
+        artist: details.artist || null,
         genres: details.genres || [],
         status: details.status || 'Unknown',
         description: details.description,
         rating,
+        contentType: isManga ? 'manga' : 'novel',
         source: source.name,
         sourceId: source.id,
         totalChapters: uniqueChapters.length,
@@ -489,7 +514,7 @@ export async function getNovelDetails(novelUrl, source = null) {
 }
 
 /**
- * Get chapter content
+ * Get chapter content (text for novels, images for manga)
  */
 export async function getChapterContent(chapterUrl, source = null) {
     source = source || getActiveSource();
@@ -497,7 +522,8 @@ export async function getChapterContent(chapterUrl, source = null) {
         throw new Error('No active source configured');
     }
 
-    log.debug(`Fetching chapter: ${chapterUrl}`);
+    const isManga = isMangaSource(source);
+    log.debug(`Fetching ${isManga ? 'manga' : 'novel'} chapter: ${chapterUrl}`);
 
     const html = await fetchPage(chapterUrl, source);
     const $ = cheerio.load(html);
@@ -511,12 +537,100 @@ export async function getChapterContent(chapterUrl, source = null) {
         if (title) break;
     }
 
+    // Handle manga (images) vs novel (text)
+    if (isManga || contentConfig.type === 'images') {
+        return getMangaChapterContent($, html, title, contentConfig, source);
+    } else {
+        return getNovelChapterContent($, title, contentConfig);
+    }
+}
+
+/**
+ * Extract manga chapter images
+ */
+function getMangaChapterContent($, html, title, contentConfig, source) {
+    const images = [];
+
+    // First, try to extract from JavaScript array if pattern is specified
+    if (contentConfig.scriptArrayPattern) {
+        const regex = new RegExp(contentConfig.scriptArrayPattern, 's');
+        const match = html.match(regex);
+        if (match && match[1]) {
+            // Parse the array content - extract all URLs between quotes
+            const arrayContent = match[1];
+            // Match URLs that start with http or https
+            const urlMatches = arrayContent.match(/['"]((https?:)?\/\/[^'"]+)['"]/g);
+            if (urlMatches) {
+                urlMatches.forEach(urlMatch => {
+                    let cleanUrl = urlMatch.replace(/^['"]|['"]$/g, '');
+                    // Handle protocol-relative URLs
+                    if (cleanUrl.startsWith('//')) {
+                        cleanUrl = 'https:' + cleanUrl;
+                    }
+                    if (cleanUrl && cleanUrl.startsWith('http')) {
+                        images.push(cleanUrl);
+                    }
+                });
+            }
+        }
+        log.debug(`Extracted ${images.length} images from script array`);
+    }
+
+    // If no images found from script, try DOM selectors
+    if (images.length === 0 && contentConfig.imageSelectors) {
+        for (const selector of contentConfig.imageSelectors) {
+            $(selector).each((_, el) => {
+                // Try data-src first (lazy loading), then src
+                let imgUrl = $(el).attr(contentConfig.imageAttribute || 'data-src');
+                if (!imgUrl && contentConfig.imageAttributeFallback) {
+                    imgUrl = $(el).attr(contentConfig.imageAttributeFallback);
+                }
+                if (!imgUrl) {
+                    imgUrl = $(el).attr('src');
+                }
+
+                if (imgUrl && !imgUrl.includes('data:image')) {
+                    images.push(ensureAbsoluteUrl(imgUrl, source.baseUrl));
+                }
+            });
+            if (images.length > 0) break;
+        }
+    }
+
+    // Also try the image container
+    if (images.length === 0 && contentConfig.imageContainer) {
+        $(contentConfig.imageContainer).find('img').each((_, el) => {
+            let imgUrl = $(el).attr(contentConfig.imageAttribute || 'data-src');
+            if (!imgUrl) imgUrl = $(el).attr('src');
+
+            if (imgUrl && !imgUrl.includes('data:image')) {
+                images.push(ensureAbsoluteUrl(imgUrl, source.baseUrl));
+            }
+        });
+    }
+
+    log.debug(`Found ${images.length} images in chapter`);
+
+    return {
+        title,
+        type: 'manga',
+        images,
+        pageCount: images.length,
+    };
+}
+
+/**
+ * Extract novel chapter text
+ */
+function getNovelChapterContent($, title, contentConfig) {
     // Get content element
     const contentEl = $(contentConfig.contentSelector).first();
 
     // Remove unwanted elements
-    for (const removeSelector of contentConfig.removeSelectors) {
-        contentEl.find(removeSelector).remove();
+    if (contentConfig.removeSelectors) {
+        for (const removeSelector of contentConfig.removeSelectors) {
+            contentEl.find(removeSelector).remove();
+        }
     }
 
     // Extract text from paragraphs
@@ -538,6 +652,7 @@ export async function getChapterContent(chapterUrl, source = null) {
 
     return {
         title,
+        type: 'novel',
         content,
         wordCount: content.split(/\s+/).length,
     };
