@@ -1,13 +1,56 @@
 /**
  * Nyaa.si Search Module
  * Handles searching and parsing anime torrents from nyaa.si
+ * Supports mirror domains for regions where nyaa.si is blocked
  */
 
 import * as cheerio from 'cheerio';
 import fetch from 'node-fetch';
 import { log } from './logger.js';
 
-const NYAA_BASE_URL = 'https://nyaa.si';
+// Mirror domains (in order of preference)
+const NYAA_MIRRORS = [
+    'https://nyaa.si',
+    'https://nyaa.land',
+    'https://nyaa.iss.one',
+    'https://nyaa.iss.ink'
+];
+
+// Currently active mirror
+let activeMirror = NYAA_MIRRORS[0];
+let mirrorIndex = 0;
+
+/**
+ * Get the current active base URL
+ */
+function getBaseUrl() {
+    return activeMirror;
+}
+
+/**
+ * Try next mirror if current one fails
+ */
+function tryNextMirror() {
+    mirrorIndex = (mirrorIndex + 1) % NYAA_MIRRORS.length;
+    activeMirror = NYAA_MIRRORS[mirrorIndex];
+    log.info(`Switching to mirror: ${activeMirror}`);
+    return activeMirror;
+}
+
+/**
+ * Reset to primary mirror
+ */
+export function resetMirror() {
+    mirrorIndex = 0;
+    activeMirror = NYAA_MIRRORS[0];
+}
+
+/**
+ * Get current mirror URL
+ */
+export function getCurrentMirror() {
+    return activeMirror;
+}
 
 // Categories
 export const CATEGORIES = {
@@ -104,14 +147,14 @@ export function parseEpisodeFromTitle(title) {
 }
 
 /**
- * Search nyaa.si for anime torrents
+ * Search nyaa for anime torrents (with mirror fallback)
  */
 export async function searchNyaa(query, options = {}) {
     const {
         category = CATEGORIES.ANIME,
         filter = FILTERS.NO_FILTER,
         page = 1,
-        sortBy = 'seeders', // id, seeders, leechers, downloads, size, date
+        sortBy = 'seeders',
         sortOrder = 'desc',
     } = options;
 
@@ -124,29 +167,51 @@ export async function searchNyaa(query, options = {}) {
         o: sortOrder,
     });
 
-    const url = `${NYAA_BASE_URL}/?${params.toString()}`;
-    log.debug(`Searching Nyaa: ${url}`);
+    // Try each mirror until one works
+    let lastError = null;
+    const triedMirrors = new Set();
 
-    try {
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml',
-            },
-            timeout: 15000,
-        });
+    for (let attempt = 0; attempt < NYAA_MIRRORS.length; attempt++) {
+        const baseUrl = getBaseUrl();
 
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+        if (triedMirrors.has(baseUrl)) {
+            tryNextMirror();
+            continue;
         }
+        triedMirrors.add(baseUrl);
 
-        const html = await response.text();
-        return parseSearchResults(html);
+        const url = `${baseUrl}/?${params.toString()}`;
+        log.debug(`Searching Nyaa (${baseUrl}): ${query}`);
 
-    } catch (error) {
-        log.error('Nyaa search failed', { error: error.message, query });
-        throw error;
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml',
+                },
+                timeout: 15000,
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const html = await response.text();
+            return parseSearchResults(html);
+
+        } catch (error) {
+            lastError = error;
+            log.warn(`Mirror ${baseUrl} failed: ${error.message}`);
+
+            // Try next mirror
+            if (attempt < NYAA_MIRRORS.length - 1) {
+                tryNextMirror();
+            }
+        }
     }
+
+    log.error('All Nyaa mirrors failed', { error: lastError?.message, query });
+    throw new Error(`All mirrors failed. Last error: ${lastError?.message}`);
 }
 
 /**
@@ -201,8 +266,8 @@ function parseSearchResults(html) {
                 id,
                 title,
                 category,
-                detailUrl: detailUrl ? `${NYAA_BASE_URL}${detailUrl}` : null,
-                torrentUrl: torrentLink ? `${NYAA_BASE_URL}${torrentLink}` : null,
+                detailUrl: detailUrl ? `${getBaseUrl()}${detailUrl}` : null,
+                torrentUrl: torrentLink ? `${getBaseUrl()}${torrentLink}` : null,
                 magnetLink,
                 size,
                 sizeBytes,
@@ -225,7 +290,7 @@ function parseSearchResults(html) {
  * Get torrent details including file list
  */
 export async function getTorrentDetails(torrentId) {
-    const url = `${NYAA_BASE_URL}/view/${torrentId}`;
+    const url = `${getBaseUrl()}/view/${torrentId}`;
     log.debug(`Fetching torrent details: ${url}`);
 
     try {
@@ -312,7 +377,7 @@ function parseDetailPage(html, torrentId) {
         id: torrentId,
         title,
         magnetLink,
-        torrentUrl: torrentLink ? `${NYAA_BASE_URL}${torrentLink}` : null,
+        torrentUrl: torrentLink ? `${getBaseUrl()}${torrentLink}` : null,
         info,
         description: description.substring(0, 500),
         files,

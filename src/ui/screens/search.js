@@ -37,6 +37,7 @@ import {
   formatEpisodeInfo,
   extractEpisodesFromTitle
 } from '../../utils/episode-parser.js';
+import { getCurrentMirror } from '../../nyaa.js';
 
 /**
  * Show download method selection based on source capabilities
@@ -88,7 +89,8 @@ async function performAnimeSearch() {
     searchQuery += ` Season ${episodeInfo.season}`;
   }
 
-  console.log(colors.muted(`\nSearching for "${searchQuery}"...`));
+  const mirror = getCurrentMirror();
+  console.log(colors.muted(`\nSearching for "${searchQuery}" on ${mirror}...`));
 
   if (episodeInfo.episodes.length > 0 || episodeInfo.season !== null) {
     console.log(colors.muted(`Looking for: ${formatEpisodeInfo(episodeInfo)}`));
