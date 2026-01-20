@@ -1,0 +1,116 @@
+{
+    "name": "NovelFull",
+    "id": "novelfull.net",
+    "baseUrl": "https://novelfull.net",
+    "enabled": true,
+    "version": "1.0.0",
+    "http": {
+        "timeout": 15000,
+        "retryAttempts": 3,
+        "retryDelay": 1000,
+        "rateLimit": 300,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    },
+    "search": {
+        "url": "{baseUrl}/search?keyword={query}",
+        "resultSelector": ".list-truyen .row, .col-truyen-main .row",
+        "fields": {
+            "title": {
+                "selector": ".truyen-title a, h3 a",
+                "attribute": "text"
+            },
+            "url": {
+                "selector": ".truyen-title a, h3 a",
+                "attribute": "href"
+            },
+            "author": {
+                "selector": ".author",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "cover": {
+                "selector": "img",
+                "attribute": "src"
+            }
+        }
+    },
+    "novelDetails": {
+        "fields": {
+            "title": {
+                "selector": "h3.title",
+                "attribute": "text"
+            },
+            "cover": {
+                "selector": ".book img, .info-holder img",
+                "attribute": "src"
+            },
+            "author": {
+                "selector": "a[href*=\"/author/\"]",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "genres": {
+                "selector": "a[href*=\"/genre/\"]",
+                "attribute": "text",
+                "multiple": true
+            },
+            "status": {
+                "selector": "a[href*=\"status\"]",
+                "attribute": "text",
+                "transform": "status"
+            },
+            "description": {
+                "selector": ".desc-text, .description",
+                "attribute": "text"
+            },
+            "ratingValue": {
+                "selector": "[itemprop=\"ratingValue\"]",
+                "attribute": "text"
+            },
+            "ratingCount": {
+                "selector": "[itemprop=\"ratingCount\"]",
+                "attribute": "text"
+            }
+        }
+    },
+    "chapterList": {
+        "containerSelector": "ul.list-chapter li a",
+        "fields": {
+            "title": {
+                "attribute": "title",
+                "fallback": "text"
+            },
+            "url": {
+                "attribute": "href"
+            }
+        },
+        "chapterNumberPattern": "chapter\\s*(\\d+)",
+        "chapterNumberUrlPattern": "chapter-(\\d+)",
+        "pagination": {
+            "type": "query",
+            "param": "page",
+            "lastPageSelector": ".pagination li.last a",
+            "pageLinksSelector": ".pagination li a",
+            "totalPagesInputSelector": "#total-page"
+        }
+    },
+    "chapterContent": {
+        "titleSelectors": [
+            ".chapter-title",
+            ".chapter-text h1",
+            "h1 a.chapter-title",
+            "a.chapter-title",
+            "h2 a"
+        ],
+        "contentSelector": "#chapter-content, .chapter-c",
+        "removeSelectors": [
+            "script",
+            "iframe",
+            ".ads",
+            "[id*=\"ads\"]",
+            "[class*=\"ads\"]",
+            "div[align=\"center\"]"
+        ],
+        "paragraphSelector": "p"
+    }
+}

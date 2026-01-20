@@ -18,21 +18,34 @@ import * as storage from './storage.js';
 import { log, setDetailedLogs } from './logger.js';
 import { loadSettings, setSetting, getSettings } from './settings.js';
 import { manageDependencies } from './dependencies.js';
+import {
+    loadSources,
+    getEnabledSources,
+    getActiveSource,
+    setActiveSource,
+    setSourceEnabled
+} from './sourceManager.js';
 
 // ASCII Art Banner
-const BANNER = `
+function getBanner() {
+    const activeSource = getActiveSource();
+    const sourceName = activeSource ? activeSource.name : 'No source selected';
+    return `
 ${chalk.cyan('╔════════════════════════════════════════════════════════════╗')}
 ${chalk.cyan('║')}  ${chalk.bold.white('NOVEL DOWNLOADER')}                                        ${chalk.cyan('║')}
-${chalk.cyan('║')}  ${chalk.gray('Download & Export novels from NovelFull.net')}               ${chalk.cyan('║')}
+${chalk.cyan('║')}  ${chalk.gray('Download & Export novels from multiple sources')}            ${chalk.cyan('║')}
+${chalk.cyan('╠════════════════════════════════════════════════════════════╣')}
+${chalk.cyan('║')}  ${chalk.yellow('Source:')} ${chalk.white(sourceName.padEnd(47))} ${chalk.cyan('║')}
 ${chalk.cyan('╚════════════════════════════════════════════════════════════╝')}
 `;
+}
 
 /**
  * Main menu options
  */
 async function mainMenu() {
     console.clear();
-    console.log(BANNER);
+    console.log(getBanner());
 
     const { action } = await inquirer.prompt([
         {
@@ -44,10 +57,12 @@ async function mainMenu() {
                 { name: 'View Downloads', value: 'downloads' },
                 { name: 'Export Novel', value: 'export' },
                 new inquirer.Separator(),
+                { name: 'Sources', value: 'sources' },
                 { name: 'Dependencies', value: 'dependencies' },
                 { name: 'Settings', value: 'settings' },
                 { name: 'Exit', value: 'exit' }
-            ]
+            ],
+            loop: false
         }
     ]);
 
@@ -60,6 +75,16 @@ async function mainMenu() {
 async function downloadNewNovel() {
     console.clear();
     console.log(chalk.cyan('━━━ Download New Novel ━━━\n'));
+
+    // Check if there's an active source
+    const activeSource = getActiveSource();
+    if (!activeSource) {
+        console.log(chalk.yellow('No source selected. Please select a source first.'));
+        await pressEnterToContinue();
+        return;
+    }
+
+    console.log(chalk.gray(`Searching on: ${activeSource.name}\n`));
 
     // Get search query
     const { query } = await inquirer.prompt([
@@ -96,7 +121,8 @@ async function downloadNewNovel() {
                     new inquirer.Separator(),
                     { name: chalk.gray('← Cancel'), value: null }
                 ],
-                pageSize: 15
+                pageSize: 15,
+                loop: false
             }
         ]);
 
@@ -223,7 +249,8 @@ async function viewDownloads() {
                 { name: 'Delete a novel', value: 'delete' },
                 new inquirer.Separator(),
                 { name: chalk.gray('← Back to menu'), value: 'back' }
-            ]
+            ],
+            loop: false
         }
     ]);
 
@@ -242,7 +269,8 @@ async function viewDownloads() {
                 })),
                 new inquirer.Separator(),
                 { name: chalk.gray('← Cancel'), value: null }
-            ]
+            ],
+            loop: false
         }
     ]);
 
@@ -322,7 +350,8 @@ async function exportNovel() {
                 }),
                 new inquirer.Separator(),
                 { name: chalk.gray('← Cancel'), value: null }
-            ]
+            ],
+            loop: false
         }
     ]);
 
@@ -358,7 +387,8 @@ async function exportNovel() {
                 new inquirer.Separator(),
                 { name: chalk.gray('← Cancel'), value: null }
             ],
-            pageSize: 15
+            pageSize: 15,
+            loop: false
         }
     ]);
 
@@ -389,6 +419,115 @@ async function exportNovel() {
 }
 
 /**
+ * Sources management menu
+ */
+async function manageSources() {
+    console.clear();
+    console.log(chalk.cyan('━━━ Sources ━━━\n'));
+
+    const sources = await loadSources();
+
+    if (sources.length === 0) {
+        console.log(chalk.yellow('No sources found.'));
+        console.log(chalk.gray('Add source configurations to the sources/ directory.'));
+        await pressEnterToContinue();
+        return;
+    }
+
+    const activeSource = getActiveSource();
+
+    // Display sources
+    console.log(chalk.white('Available sources:\n'));
+    for (const source of sources) {
+        const isActive = activeSource?.id === source.id;
+        const status = source.enabled
+            ? (isActive ? chalk.green('● Active') : chalk.blue('○ Enabled'))
+            : chalk.gray('○ Disabled');
+
+        console.log(`  ${status}  ${chalk.white.bold(source.name)}`);
+        console.log(chalk.gray(`        ${source.baseUrl}`));
+        console.log(chalk.gray(`        Version: ${source.version || '1.0.0'}`));
+        console.log();
+    }
+
+    // Options menu
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'What would you like to do?',
+            choices: [
+                { name: 'Select active source', value: 'select' },
+                { name: 'Enable/Disable source', value: 'toggle' },
+                new inquirer.Separator(),
+                { name: chalk.gray('← Back to menu'), value: 'back' }
+            ],
+            loop: false
+        }
+    ]);
+
+    if (action === 'back') return;
+
+    if (action === 'select') {
+        const enabledSources = await getEnabledSources();
+
+        if (enabledSources.length === 0) {
+            console.log(chalk.yellow('\nNo enabled sources. Enable a source first.'));
+            await pressEnterToContinue();
+            return;
+        }
+
+        const { selectedSource } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'selectedSource',
+                message: 'Select active source:',
+                choices: [
+                    ...enabledSources.map(s => ({
+                        name: `${s.name} ${activeSource?.id === s.id ? chalk.green('(current)') : ''}`,
+                        value: s.id
+                    })),
+                    new inquirer.Separator(),
+                    { name: chalk.gray('← Cancel'), value: null }
+                ],
+                loop: false
+            }
+        ]);
+
+        if (selectedSource) {
+            await setActiveSource(selectedSource);
+            console.log(chalk.green(`\nActive source set to: ${selectedSource}`));
+        }
+
+    } else if (action === 'toggle') {
+        const { selectedSource } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'selectedSource',
+                message: 'Select source to enable/disable:',
+                choices: [
+                    ...sources.map(s => ({
+                        name: `${s.name} ${s.enabled ? chalk.green('[enabled]') : chalk.gray('[disabled]')}`,
+                        value: s
+                    })),
+                    new inquirer.Separator(),
+                    { name: chalk.gray('← Cancel'), value: null }
+                ],
+                loop: false
+            }
+        ]);
+
+        if (selectedSource) {
+            const newState = !selectedSource.enabled;
+            await setSourceEnabled(selectedSource.id, newState);
+            console.log(chalk.green(`\nSource "${selectedSource.name}" ${newState ? 'enabled' : 'disabled'}.`));
+        }
+    }
+
+    await pressEnterToContinue();
+}
+
+/**
  * Settings menu
  */
 async function showSettings() {
@@ -409,7 +548,8 @@ async function showSettings() {
                 },
                 new inquirer.Separator(),
                 { name: chalk.gray('← Back'), value: 'back' }
-            ]
+            ],
+            loop: false
         }
     ]);
 
@@ -458,6 +598,17 @@ async function main() {
     const settings = await loadSettings();
     setDetailedLogs(settings.detailedLogs);
 
+    // Load sources
+    const sources = await loadSources();
+    if (sources.length === 0) {
+        console.log(chalk.yellow('Warning: No sources found in sources/ directory'));
+    } else {
+        const activeSource = getActiveSource();
+        if (activeSource) {
+            log.info(`Active source: ${activeSource.name}`);
+        }
+    }
+
     // Ensure data directory exists
     await storage.ensureDataDir();
 
@@ -476,6 +627,9 @@ async function main() {
                     break;
                 case 'export':
                     await exportNovel();
+                    break;
+                case 'sources':
+                    await manageSources();
                     break;
                 case 'dependencies':
                     await manageDependencies();

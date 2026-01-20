@@ -1,35 +1,32 @@
 /**
- * NovelFull.net Scraper Module
- * Handles searching, fetching novel details, and chapter content
+ * Source-Agnostic Scraper Module
+ * Handles searching, fetching novel details, and chapter content using source configurations
  */
 
 import * as cheerio from 'cheerio';
 import fetch from 'node-fetch';
 import { log } from './logger.js';
-
-const CONFIG = {
-    baseUrl: 'https://novelfull.net',
-    searchEndpoint: '/search',
-    timeout: 15000,
-    retryAttempts: 3,
-    retryDelay: 1000,
-    rateLimit: 300, // ms between requests
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-};
+import {
+    getActiveSource,
+    buildUrl,
+    getHttpConfig,
+    ensureAbsoluteUrl
+} from './sourceManager.js';
 
 /**
  * Fetch a page with retry logic
  */
-async function fetchPage(url, attempt = 1) {
+async function fetchPage(url, source, attempt = 1) {
+    const config = getHttpConfig(source);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), config.timeout);
 
     try {
         log.debug(`Fetching: ${url}`, { attempt });
 
         const response = await fetch(url, {
             headers: {
-                'User-Agent': CONFIG.userAgent,
+                'User-Agent': config.userAgent,
                 'Accept': 'text/html,application/xhtml+xml',
             },
             signal: controller.signal,
@@ -44,10 +41,10 @@ async function fetchPage(url, attempt = 1) {
     } catch (error) {
         clearTimeout(timeoutId);
 
-        if (attempt < CONFIG.retryAttempts) {
+        if (attempt < config.retryAttempts) {
             log.warn(`Fetch attempt ${attempt} failed, retrying...`, { url, error: error.message });
-            await new Promise(r => setTimeout(r, CONFIG.retryDelay * attempt));
-            return fetchPage(url, attempt + 1);
+            await new Promise(r => setTimeout(r, config.retryDelay * attempt));
+            return fetchPage(url, source, attempt + 1);
         }
 
         log.error(`Failed to fetch after ${attempt} attempts`, { url, error: error.message });
@@ -58,14 +55,20 @@ async function fetchPage(url, attempt = 1) {
 /**
  * Fetch an image as buffer
  */
-export async function fetchImage(url) {
+export async function fetchImage(url, source = null) {
+    source = source || getActiveSource();
+    if (!source) {
+        throw new Error('No active source configured');
+    }
+
+    const config = getHttpConfig(source);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), config.timeout);
 
     try {
         const response = await fetch(url, {
             headers: {
-                'User-Agent': CONFIG.userAgent,
+                'User-Agent': config.userAgent,
             },
             signal: controller.signal,
         });
@@ -84,30 +87,118 @@ export async function fetchImage(url) {
 }
 
 /**
+ * Extract a field value from an element using source configuration
+ */
+function extractField($, el, fieldConfig, baseUrl) {
+    const $el = $(el);
+    let selectors = Array.isArray(fieldConfig.selector)
+        ? fieldConfig.selector
+        : [fieldConfig.selector];
+
+    for (const selector of selectors) {
+        const target = selector ? $el.find(selector).first() : $el;
+        if (target.length === 0) continue;
+
+        let value;
+        switch (fieldConfig.attribute) {
+            case 'text':
+                value = target.text().trim();
+                break;
+            case 'html':
+                value = target.html();
+                break;
+            default:
+                value = target.attr(fieldConfig.attribute);
+                if (fieldConfig.attribute === 'href' || fieldConfig.attribute === 'src') {
+                    value = ensureAbsoluteUrl(value, baseUrl);
+                }
+        }
+
+        if (value) {
+            // Apply transform if specified
+            if (fieldConfig.transform === 'status') {
+                value = value.toLowerCase().includes('completed') ? 'Completed' : 'Ongoing';
+            }
+            return value;
+        }
+    }
+
+    // Check for fallback
+    if (fieldConfig.fallback) {
+        const fallbackValue = fieldConfig.fallback === 'text'
+            ? $el.text().trim()
+            : $el.attr(fieldConfig.fallback);
+        if (fallbackValue) return fallbackValue;
+    }
+
+    return fieldConfig.default || null;
+}
+
+/**
+ * Extract multiple field values from elements
+ */
+function extractMultipleFields($, container, fieldConfig, baseUrl) {
+    const values = [];
+    const selector = fieldConfig.selector;
+
+    $(container).find(selector).each((_, el) => {
+        let value;
+        switch (fieldConfig.attribute) {
+            case 'text':
+                value = $(el).text().trim();
+                break;
+            default:
+                value = $(el).attr(fieldConfig.attribute);
+                if (fieldConfig.attribute === 'href' || fieldConfig.attribute === 'src') {
+                    value = ensureAbsoluteUrl(value, baseUrl);
+                }
+        }
+        if (value && !values.includes(value)) {
+            values.push(value);
+        }
+    });
+
+    return values;
+}
+
+/**
  * Search for novels by query
  */
-export async function searchNovels(query) {
-    const url = `${CONFIG.baseUrl}${CONFIG.searchEndpoint}?keyword=${encodeURIComponent(query)}`;
-    log.debug(`Searching for: ${query}`);
+export async function searchNovels(query, source = null) {
+    source = source || getActiveSource();
+    if (!source) {
+        throw new Error('No active source configured');
+    }
 
-    const html = await fetchPage(url);
+    const searchConfig = source.search;
+    const url = buildUrl(searchConfig.url, {
+        baseUrl: source.baseUrl,
+        query: query
+    });
+
+    log.debug(`Searching for: ${query} on ${source.name}`);
+
+    const html = await fetchPage(url, source);
     const $ = cheerio.load(html);
     const novels = [];
 
-    $('.list-truyen .row, .col-truyen-main .row').each((_, el) => {
-        const $el = $(el);
-        const titleLink = $el.find('.truyen-title a, h3 a').first();
-        const title = titleLink.text().trim();
-        let href = titleLink.attr('href');
+    $(searchConfig.resultSelector).each((_, el) => {
+        const novel = {};
 
-        if (!title || !href) return;
-        if (!href.startsWith('http')) href = CONFIG.baseUrl + href;
+        for (const [fieldName, fieldConfig] of Object.entries(searchConfig.fields)) {
+            novel[fieldName] = extractField($, el, fieldConfig, source.baseUrl);
+        }
 
-        const author = $el.find('.author').text().trim() || 'Unknown';
-        let cover = $el.find('img').attr('src');
-        if (cover && !cover.startsWith('http')) cover = CONFIG.baseUrl + cover;
+        // Skip if no title or URL
+        if (!novel.title || !novel.url) return;
 
-        novels.push({ title, url: href, author, cover });
+        // Ensure URL is absolute
+        novel.url = ensureAbsoluteUrl(novel.url, source.baseUrl);
+        if (novel.cover) {
+            novel.cover = ensureAbsoluteUrl(novel.cover, source.baseUrl);
+        }
+
+        novels.push(novel);
     });
 
     log.debug(`Found ${novels.length} results`);
@@ -115,26 +206,38 @@ export async function searchNovels(query) {
 }
 
 /**
- * Parse chapters from a page
+ * Parse chapters from a page using source configuration
  */
-function parseChaptersFromPage($) {
+function parseChaptersFromPage($, source) {
     const chapters = [];
+    const chapterConfig = source.chapterList;
 
-    $('ul.list-chapter li a').each((_, el) => {
+    $(chapterConfig.containerSelector).each((_, el) => {
         const $a = $(el);
-        let chUrl = $a.attr('href');
+        let chUrl = $a.attr(chapterConfig.fields.url.attribute || 'href');
         if (!chUrl) return;
-        if (!chUrl.startsWith('http')) chUrl = CONFIG.baseUrl + chUrl;
+        chUrl = ensureAbsoluteUrl(chUrl, source.baseUrl);
 
-        const chTitle = $a.attr('title')?.trim() || $a.text().trim();
+        // Get title from configured attribute with fallback
+        let chTitle = $a.attr(chapterConfig.fields.title.attribute);
+        if (!chTitle && chapterConfig.fields.title.fallback) {
+            chTitle = chapterConfig.fields.title.fallback === 'text'
+                ? $a.text().trim()
+                : $a.attr(chapterConfig.fields.title.fallback);
+        }
+        if (!chTitle) chTitle = $a.text().trim();
         if (!chTitle) return;
 
         // Extract chapter number
         let num = null;
-        const titleMatch = chTitle.match(/chapter\s*(\d+)/i);
-        const urlMatch = chUrl.match(/chapter-(\d+)/i);
-        if (titleMatch) num = parseInt(titleMatch[1]);
-        else if (urlMatch) num = parseInt(urlMatch[1]);
+        if (chapterConfig.chapterNumberPattern) {
+            const titleMatch = chTitle.match(new RegExp(chapterConfig.chapterNumberPattern, 'i'));
+            if (titleMatch) num = parseInt(titleMatch[1]);
+        }
+        if (num === null && chapterConfig.chapterNumberUrlPattern) {
+            const urlMatch = chUrl.match(new RegExp(chapterConfig.chapterNumberUrlPattern, 'i'));
+            if (urlMatch) num = parseInt(urlMatch[1]);
+        }
 
         chapters.push({
             number: num,
@@ -149,29 +252,36 @@ function parseChaptersFromPage($) {
 /**
  * Get total pages for novel's chapter list
  */
-function getTotalPages($) {
+function getTotalPages($, source) {
+    const pagination = source.chapterList.pagination;
+    if (!pagination) return 1;
+
     let maxPage = 1;
 
     // Check the "Last" pagination link first (most reliable)
-    const lastLink = $('.pagination li.last a').attr('href') || '';
-    const lastMatch = lastLink.match(/page=(\d+)/);
-    if (lastMatch) {
-        maxPage = parseInt(lastMatch[1]);
+    if (pagination.lastPageSelector) {
+        const lastLink = $(pagination.lastPageSelector).attr('href') || '';
+        const lastMatch = lastLink.match(new RegExp(`${pagination.param}=(\\d+)`));
+        if (lastMatch) {
+            maxPage = parseInt(lastMatch[1]);
+        }
     }
 
     // Also scan all pagination links
-    $('.pagination li a').each((_, el) => {
-        const href = $(el).attr('href') || '';
-        const match = href.match(/page=(\d+)/);
-        if (match) {
-            const pageNum = parseInt(match[1]);
-            if (pageNum > maxPage) maxPage = pageNum;
-        }
-    });
+    if (pagination.pageLinksSelector) {
+        $(pagination.pageLinksSelector).each((_, el) => {
+            const href = $(el).attr('href') || '';
+            const match = href.match(new RegExp(`${pagination.param}=(\\d+)`));
+            if (match) {
+                const pageNum = parseInt(match[1]);
+                if (pageNum > maxPage) maxPage = pageNum;
+            }
+        });
+    }
 
     // Fallback to hidden input only if no pagination found
-    if (maxPage === 1) {
-        const totalPageInput = $('#total-page').val();
+    if (maxPage === 1 && pagination.totalPagesInputSelector) {
+        const totalPageInput = $(pagination.totalPagesInputSelector).val();
         if (totalPageInput) {
             maxPage = parseInt(totalPageInput) || 1;
         }
@@ -183,57 +293,71 @@ function getTotalPages($) {
 /**
  * Get full novel details including all chapters
  */
-export async function getNovelDetails(novelUrl) {
+export async function getNovelDetails(novelUrl, source = null) {
+    source = source || getActiveSource();
+    if (!source) {
+        throw new Error('No active source configured');
+    }
+
     log.debug(`Fetching novel details from: ${novelUrl}`);
 
-    const html = await fetchPage(novelUrl);
+    const html = await fetchPage(novelUrl, source);
     const $ = cheerio.load(html);
 
-    // Title
-    const title = $('.title, h3.title').first().text().trim() || $('h1').first().text().trim();
+    const detailsConfig = source.novelDetails;
+    const details = {};
 
-    // Cover
-    let cover = $('.book img, .info-holder img').first().attr('src');
-    if (cover && !cover.startsWith('http')) cover = CONFIG.baseUrl + cover;
+    // Extract each field from configuration
+    for (const [fieldName, fieldConfig] of Object.entries(detailsConfig.fields)) {
+        if (fieldConfig.multiple) {
+            details[fieldName] = extractMultipleFields($, 'body', fieldConfig, source.baseUrl);
+        } else {
+            details[fieldName] = extractField($, 'body', fieldConfig, source.baseUrl);
+        }
+    }
 
-    // Author
-    const author = $('a[href*="/author/"]').first().text().trim() || 'Unknown';
+    // Build rating string if rating values exist
+    let rating = null;
+    if (details.ratingValue) {
+        rating = `${details.ratingValue}/10`;
+        if (details.ratingCount) {
+            rating += ` from ${details.ratingCount} ratings`;
+        }
+    }
+    delete details.ratingValue;
+    delete details.ratingCount;
 
-    // Genres
-    const genres = [];
-    $('a[href*="/genre/"]').each((_, el) => {
-        const g = $(el).text().trim();
-        if (g && !genres.includes(g)) genres.push(g);
-    });
-
-    // Status
-    const statusText = $('a[href*="status"]').text() || '';
-    const status = statusText.toLowerCase().includes('completed') ? 'Completed' : 'Ongoing';
-
-    // Description
-    const description = $('.desc-text, .description').first().text().trim();
-
-    // Rating
-    const ratingText = $('[itemprop="ratingValue"]').text();
-    const ratingCount = $('[itemprop="ratingCount"]').text();
-    const rating = ratingText ? `${ratingText}/10 from ${ratingCount} ratings` : null;
+    // Ensure cover is absolute URL
+    if (details.cover) {
+        details.cover = ensureAbsoluteUrl(details.cover, source.baseUrl);
+    }
 
     // Get total pages
-    const totalPages = getTotalPages($);
+    const totalPages = getTotalPages($, source);
     log.debug(`Found ${totalPages} page(s) of chapters`);
 
     // Get chapters from first page
-    let allChapters = parseChaptersFromPage($);
+    let allChapters = parseChaptersFromPage($, source);
     log.debug(`Page 1: ${allChapters.length} chapters`);
 
     // Fetch remaining pages
+    const config = getHttpConfig(source);
+    const pagination = source.chapterList.pagination;
+
     for (let page = 2; page <= totalPages; page++) {
-        const pageUrl = `${novelUrl}?page=${page}`;
+        let pageUrl;
+        if (pagination.type === 'query') {
+            const separator = novelUrl.includes('?') ? '&' : '?';
+            pageUrl = `${novelUrl}${separator}${pagination.param}=${page}`;
+        } else {
+            pageUrl = `${novelUrl}/${page}`;
+        }
+
         try {
-            await new Promise(r => setTimeout(r, CONFIG.rateLimit));
-            const pageHtml = await fetchPage(pageUrl);
+            await new Promise(r => setTimeout(r, config.rateLimit));
+            const pageHtml = await fetchPage(pageUrl, source);
             const $page = cheerio.load(pageHtml);
-            const pageChapters = parseChaptersFromPage($page);
+            const pageChapters = parseChaptersFromPage($page, source);
             allChapters = allChapters.concat(pageChapters);
             log.debug(`Page ${page}: ${pageChapters.length} chapters`);
         } catch (err) {
@@ -263,15 +387,16 @@ export async function getNovelDetails(novelUrl) {
     log.debug(`Total unique chapters: ${uniqueChapters.length}`);
 
     return {
-        title,
+        title: details.title,
         url: novelUrl,
-        cover,
-        author,
-        genres,
-        status,
-        description,
+        cover: details.cover,
+        author: details.author || 'Unknown',
+        genres: details.genres || [],
+        status: details.status || 'Unknown',
+        description: details.description,
         rating,
-        source: 'NovelFull.net',
+        source: source.name,
+        sourceId: source.id,
         totalChapters: uniqueChapters.length,
         chapters: uniqueChapters,
         fetchedAt: new Date().toISOString()
@@ -281,26 +406,39 @@ export async function getNovelDetails(novelUrl) {
 /**
  * Get chapter content
  */
-export async function getChapterContent(chapterUrl) {
+export async function getChapterContent(chapterUrl, source = null) {
+    source = source || getActiveSource();
+    if (!source) {
+        throw new Error('No active source configured');
+    }
+
     log.debug(`Fetching chapter: ${chapterUrl}`);
 
-    const html = await fetchPage(chapterUrl);
+    const html = await fetchPage(chapterUrl, source);
     const $ = cheerio.load(html);
 
-    // Get chapter title
-    const title = $('.chapter-title, .chapter-text h1, h1 a.chapter-title').first().text().trim()
-        || $('a.chapter-title').first().text().trim()
-        || $('h2 a').first().text().trim();
+    const contentConfig = source.chapterContent;
 
-    // Get content
-    const contentEl = $('#chapter-content, .chapter-c').first();
+    // Get chapter title - try each selector in order
+    let title = '';
+    for (const selector of contentConfig.titleSelectors) {
+        title = $(selector).first().text().trim();
+        if (title) break;
+    }
 
-    // Remove ads, scripts, iframes
-    contentEl.find('script, iframe, .ads, [id*="ads"], [class*="ads"], div[align="center"]').remove();
+    // Get content element
+    const contentEl = $(contentConfig.contentSelector).first();
+
+    // Remove unwanted elements
+    for (const removeSelector of contentConfig.removeSelectors) {
+        contentEl.find(removeSelector).remove();
+    }
 
     // Extract text from paragraphs
     const paragraphs = [];
-    contentEl.find('p').each((_, el) => {
+    const paragraphSelector = contentConfig.paragraphSelector || 'p';
+
+    contentEl.find(paragraphSelector).each((_, el) => {
         const text = $(el).text().trim();
         if (text && text.length > 0) {
             paragraphs.push(text);
@@ -320,4 +458,9 @@ export async function getChapterContent(chapterUrl) {
     };
 }
 
-export { CONFIG };
+// Re-export for backward compatibility
+export function getConfig() {
+    const source = getActiveSource();
+    if (!source) return null;
+    return getHttpConfig(source);
+}

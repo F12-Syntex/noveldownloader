@@ -210,7 +210,8 @@ export async function manageDependencies() {
             message: hasWinget
                 ? 'What would you like to do?'
                 : 'Winget not found. What would you like to do?',
-            choices
+            choices,
+            loop: false
         }
     ]);
 
