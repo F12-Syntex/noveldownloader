@@ -9,6 +9,9 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "build": "node build.js",
+    "build:exe": "node build.js --no-installer",
+    "build:installer": "node build.js --installer-only",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
@@ -18,5 +21,21 @@
     "cheerio": "^1.1.2",
     "inquirer": "^9.2.15",
     "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0",
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [
+      "src/**/*"
+    ],
+    "scripts": [
+      "src/**/*.js"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
   }
 }

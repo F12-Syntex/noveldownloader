@@ -1,10 +1,31 @@
+# Dependencies
 node_modules/
-data/
-logs/
-exports/
+
+# Build output
+dist/
+
+# Temp files
 temp/
-settings.json
+
+# Exports (user data)
+exports/
+
+# Data storage
+data/
+
+# Logs
+logs/
 *.log
+
+# OS files
 .DS_Store
 Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
 nul
