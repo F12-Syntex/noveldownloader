@@ -9,10 +9,15 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { searchNovels, getNovelDetails } from './scraper.js';
 import { downloadNovel, retryFailedChapters, getDownloadProgress } from './downloader.js';
-import { exportToEpub, exportToPdf, listExports } from './exporter.js';
+import {
+    exportToEpub, exportToPdf, exportToDocx, exportToOdt,
+    exportToHtml, exportToTxt, exportToRtf, exportToAzw3, exportToMobi,
+    listExports, checkPandoc, checkLatex, checkCalibre
+} from './exporter.js';
 import * as storage from './storage.js';
 import { log, setDetailedLogs } from './logger.js';
 import { loadSettings, setSetting, getSettings } from './settings.js';
+import { manageDependencies } from './dependencies.js';
 
 // ASCII Art Banner
 const BANNER = `
@@ -39,6 +44,7 @@ async function mainMenu() {
                 { name: 'View Downloads', value: 'downloads' },
                 { name: 'Export Novel', value: 'export' },
                 new inquirer.Separator(),
+                { name: 'Dependencies', value: 'dependencies' },
                 { name: 'Settings', value: 'settings' },
                 { name: 'Exit', value: 'exit' }
             ]
@@ -337,11 +343,22 @@ async function exportNovel() {
             name: 'format',
             message: 'Select export format:',
             choices: [
+                new inquirer.Separator('─── E-Book Formats ───'),
                 { name: '📖  EPUB (e-readers, most devices)', value: 'epub' },
+                { name: '📱  AZW3 (Kindle modern)', value: 'azw3' },
+                { name: '📱  MOBI (Kindle legacy)', value: 'mobi' },
+                new inquirer.Separator('─── Document Formats ───'),
                 { name: '📄  PDF (print, desktop reading)', value: 'pdf' },
+                { name: '📝  DOCX (Microsoft Word)', value: 'docx' },
+                { name: '📝  ODT (LibreOffice/OpenDocument)', value: 'odt' },
+                { name: '📝  RTF (Rich Text Format)', value: 'rtf' },
+                new inquirer.Separator('─── Other Formats ───'),
+                { name: '🌐  HTML (web page)', value: 'html' },
+                { name: '📃  TXT (plain text)', value: 'txt' },
                 new inquirer.Separator(),
                 { name: chalk.gray('← Cancel'), value: null }
-            ]
+            ],
+            pageSize: 15
         }
     ]);
 
@@ -350,11 +367,19 @@ async function exportNovel() {
     console.log(chalk.gray(`\nExporting ${downloadedChapters.length} chapters...`));
 
     try {
-        if (format === 'epub') {
-            await exportToEpub(selectedNovel.title);
-        } else {
-            await exportToPdf(selectedNovel.title);
-        }
+        const exportFunctions = {
+            epub: exportToEpub,
+            pdf: exportToPdf,
+            docx: exportToDocx,
+            odt: exportToOdt,
+            html: exportToHtml,
+            txt: exportToTxt,
+            rtf: exportToRtf,
+            azw3: exportToAzw3,
+            mobi: exportToMobi
+        };
+
+        await exportFunctions[format](selectedNovel.title);
     } catch (error) {
         console.log(chalk.red(`\nExport failed: ${error.message}`));
         log.error('Export failed', { error: error.message, format });
@@ -451,6 +476,10 @@ async function main() {
                     break;
                 case 'export':
                     await exportNovel();
+                    break;
+                case 'dependencies':
+                    await manageDependencies();
+                    await pressEnterToContinue();
                     break;
                 case 'settings':
                     await showSettings();
