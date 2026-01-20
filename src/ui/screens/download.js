@@ -1,6 +1,7 @@
 /**
  * Download Screen
  * Handles download flows for all content types
+ * Includes partial download support with ffmpeg segment extraction
  */
 
 import {
@@ -14,6 +15,7 @@ import {
   selectMenu,
   multiSelect,
   rangeInput,
+  textInput,
   confirm,
   pressEnter,
   success,
@@ -32,6 +34,16 @@ import {
 import { getActiveSource } from '../../core/sources/manager.js';
 import { getHandlerForSource } from '../../core/content/index.js';
 import { ContentType } from '../../core/content/types.js';
+import {
+  checkFfmpeg,
+  extractSegment,
+  getRandomTimestamp,
+  formatTimestamp,
+  parseTimestamp,
+  parseDuration
+} from '../../utils/video.js';
+import path from 'path';
+import fs from 'fs/promises';
 
 /**
  * Show content details and confirm download
@@ -132,9 +144,84 @@ export async function selectChapters(contentInfo) {
 }
 
 /**
+ * Select download mode for torrent files
+ * @returns {Promise<Object|null>} Download mode configuration
+ */
+export async function selectDownloadMode() {
+  const hasFfmpeg = await checkFfmpeg();
+
+  const choices = [
+    menuChoice('Full Download', 'full', 'Download complete file(s)'),
+  ];
+
+  if (hasFfmpeg) {
+    choices.push(menuChoice('Quick Sample (30s)', 'sample', 'Random 30-second preview'));
+    choices.push(menuChoice('Custom Segment', 'custom', 'Choose duration and timestamp'));
+  } else {
+    choices.push({
+      name: colors.muted('Quick Sample (requires ffmpeg)'),
+      value: null,
+      disabled: 'Install ffmpeg to enable'
+    });
+    choices.push({
+      name: colors.muted('Custom Segment (requires ffmpeg)'),
+      value: null,
+      disabled: 'Install ffmpeg to enable'
+    });
+  }
+
+  choices.push(backChoice('Cancel'));
+
+  const mode = await selectMenu('Download mode:', choices);
+
+  if (!mode) return null;
+
+  if (mode === 'full') {
+    return { mode: 'full' };
+  }
+
+  if (mode === 'sample') {
+    return {
+      mode: 'sample',
+      duration: 30,
+      timestamp: 'random',
+      keepOriginal: false
+    };
+  }
+
+  if (mode === 'custom') {
+    // Get duration
+    console.log('');
+    console.log(colors.muted('Enter duration (e.g., "30", "1:30", "2m30s")'));
+    const durationInput = await textInput('Duration:');
+    const duration = parseDuration(durationInput) || 30;
+
+    // Get timestamp
+    console.log('');
+    console.log(colors.muted('Enter start time (e.g., "0", "5:00", "random", or leave empty for random)'));
+    const timestampInput = await textInput('Start time:');
+    const timestamp = timestampInput.trim().toLowerCase() === 'random' || !timestampInput.trim()
+      ? 'random'
+      : parseTimestamp(timestampInput);
+
+    // Ask about keeping original
+    const keepOriginal = await confirm('Keep full file after extracting segment?', false);
+
+    return {
+      mode: 'custom',
+      duration,
+      timestamp,
+      keepOriginal
+    };
+  }
+
+  return null;
+}
+
+/**
  * Select files from torrent
  * @param {Object} torrentInfo - Torrent info with files
- * @returns {Promise<number[]|null>} Array of file indices or null
+ * @returns {Promise<Object|null>} Selection with file indices and download mode
  */
 export async function selectTorrentFiles(torrentInfo) {
   if (!torrentInfo.files || torrentInfo.files.length === 0) {
@@ -148,43 +235,68 @@ export async function selectTorrentFiles(torrentInfo) {
   console.log('\n' + fileList(torrentInfo.files, { showSize: true }));
   console.log('');
 
-  const choices = [
+  // First, select which files
+  const fileChoices = [
     menuChoice('Download All Files', 'all', `${torrentInfo.files.length} files`),
   ];
 
   if (videoFiles.length > 0 && videoFiles.length < torrentInfo.files.length) {
-    choices.push(menuChoice('Video Files Only', 'video', `${videoFiles.length} video files`));
+    fileChoices.push(menuChoice('Video Files Only', 'video', `${videoFiles.length} video files`));
   }
 
-  choices.push(menuChoice('Select Specific Files', 'select', 'Choose individual files'));
-  choices.push(backChoice('Cancel'));
+  fileChoices.push(menuChoice('Select Specific Files', 'select', 'Choose individual files'));
+  fileChoices.push(backChoice('Cancel'));
 
-  const method = await selectMenu('Which files would you like to download?', choices);
+  const method = await selectMenu('Which files would you like to download?', fileChoices);
+
+  let selectedIndices = null;
 
   switch (method) {
     case 'all':
-      return torrentInfo.files.map(f => f.index);
+      selectedIndices = torrentInfo.files.map(f => f.index);
+      break;
 
     case 'video':
-      return videoFiles.map(f => f.index);
+      selectedIndices = videoFiles.map(f => f.index);
+      break;
 
     case 'select':
-      const fileChoices = torrentInfo.files.map(f => ({
+      const selectChoices = torrentInfo.files.map(f => ({
         name: `${f.name} ${colors.muted(`(${f.sizeFormatted || formatBytes(f.size)})`)}`,
         value: f.index,
         checked: f.isVideo
       }));
 
-      const selected = await multiSelect('Select files to download:', fileChoices, {
+      selectedIndices = await multiSelect('Select files to download:', selectChoices, {
         required: true,
         pageSize: 15
       });
-
-      return selected;
+      break;
 
     default:
       return null;
   }
+
+  if (!selectedIndices || selectedIndices.length === 0) {
+    return null;
+  }
+
+  // Check if any selected files are videos - offer partial download
+  const selectedFiles = selectedIndices.map(idx => torrentInfo.files[idx]);
+  const hasVideoFiles = selectedFiles.some(f => f.isVideo);
+
+  let downloadMode = { mode: 'full' };
+
+  if (hasVideoFiles) {
+    console.log('');
+    downloadMode = await selectDownloadMode();
+    if (!downloadMode) return null;
+  }
+
+  return {
+    indices: selectedIndices,
+    ...downloadMode
+  };
 }
 
 /**
@@ -297,14 +409,26 @@ export async function downloadContent(contentInfo, chapterIndices) {
 /**
  * Complete download flow for anime torrents
  * @param {Object} torrentInfo - Torrent info
- * @param {number[]} fileIndices - File indices to download
+ * @param {Object} selection - Selection with indices and download mode
  * @param {Object} options - Download options
  * @returns {Promise<Object>} Download results
  */
-export async function downloadTorrent(torrentInfo, fileIndices, options = {}) {
+export async function downloadTorrent(torrentInfo, selection, options = {}) {
   const handler = getHandlerForSource(getActiveSource());
 
+  // Handle old API (just indices array)
+  const fileIndices = Array.isArray(selection) ? selection : selection.indices;
+  const downloadMode = Array.isArray(selection) ? { mode: 'full' } : selection;
+
   console.log('\n' + sectionHeader('Downloading Anime'));
+
+  if (downloadMode.mode !== 'full') {
+    const modeDesc = downloadMode.mode === 'sample'
+      ? 'Quick sample (30s random)'
+      : `Custom segment (${downloadMode.duration}s at ${downloadMode.timestamp === 'random' ? 'random' : formatTimestamp(downloadMode.timestamp)})`;
+    console.log(info(`Mode: ${modeDesc}`));
+  }
+
   console.log(info(`Downloading ${fileIndices.length} file(s)...`));
   console.log('');
 
@@ -314,10 +438,89 @@ export async function downloadTorrent(torrentInfo, fileIndices, options = {}) {
   });
 
   console.log(''); // New line after progress
-  console.log(success('Download complete!'));
 
-  if (results.files) {
-    console.log(colors.muted(`\nDownloaded to: ${results.files[0]?.path?.replace(/[^/\\]+$/, '')}`));
+  // Handle partial download / segment extraction
+  if (downloadMode.mode !== 'full' && results.files) {
+    console.log(success('Download complete! Extracting segment...'));
+    console.log('');
+
+    const extractedFiles = [];
+    const videoExtensions = ['.mkv', '.mp4', '.avi', '.webm', '.mov'];
+
+    for (const file of results.files) {
+      const isVideo = videoExtensions.some(ext =>
+        file.name.toLowerCase().endsWith(ext)
+      );
+
+      if (!isVideo) {
+        extractedFiles.push(file);
+        continue;
+      }
+
+      try {
+        // Determine timestamp
+        let startTime = downloadMode.timestamp;
+        if (startTime === 'random') {
+          // Estimate duration based on file size (rough: 1GB ~ 45min for 1080p)
+          const estimatedDuration = Math.max(300, (file.size / (1024 * 1024 * 1024)) * 2700);
+          startTime = getRandomTimestamp(estimatedDuration, downloadMode.duration);
+        }
+
+        console.log(colors.muted(`Extracting ${downloadMode.duration}s from ${file.name} at ${formatTimestamp(startTime)}...`));
+
+        // Create output path for segment
+        const ext = path.extname(file.name);
+        const baseName = path.basename(file.name, ext);
+        const segmentName = `${baseName}_sample_${formatTimestamp(startTime).replace(/:/g, '-')}_${downloadMode.duration}s${ext}`;
+        const segmentPath = path.join(path.dirname(file.path), segmentName);
+
+        const segmentResult = await extractSegment(file.path, segmentPath, {
+          startTime,
+          duration: downloadMode.duration,
+          onProgress: (p) => {
+            if (process.stdout.isTTY && process.stdout.clearLine) {
+              process.stdout.clearLine(0);
+              process.stdout.cursorTo(0);
+            }
+            process.stdout.write(`Extracting: ${p.progress}%`);
+          }
+        });
+
+        console.log(''); // New line after progress
+        console.log(success(`Extracted: ${segmentName}`));
+
+        extractedFiles.push({
+          name: segmentName,
+          path: segmentPath,
+          size: segmentResult.size,
+          isSegment: true,
+          originalFile: file.path
+        });
+
+        // Delete original if not keeping
+        if (!downloadMode.keepOriginal) {
+          try {
+            await fs.unlink(file.path);
+            console.log(colors.muted(`Removed full file: ${file.name}`));
+          } catch (err) {
+            console.log(warning(`Could not remove original: ${err.message}`));
+          }
+        }
+
+      } catch (err) {
+        console.log(error(`Failed to extract segment from ${file.name}: ${err.message}`));
+        extractedFiles.push(file); // Keep original on failure
+      }
+    }
+
+    results.files = extractedFiles;
+    results.isPartial = true;
+  } else {
+    console.log(success('Download complete!'));
+  }
+
+  if (results.files && results.files.length > 0) {
+    console.log(colors.muted(`\nSaved to: ${path.dirname(results.files[0].path)}`));
   }
 
   return results;

@@ -276,9 +276,9 @@ class App {
 
     console.log(success(`Found ${torrentInfo.files.length} files (${torrentInfo.totalSizeFormatted})`));
 
-    // Select files
-    const fileIndices = await selectTorrentFiles(torrentInfo);
-    if (!fileIndices || fileIndices.length === 0) {
+    // Select files and download mode
+    const selection = await selectTorrentFiles(torrentInfo);
+    if (!selection || !selection.indices || selection.indices.length === 0) {
       // Clean up torrent if user cancels
       handler.removeTorrent(torrentInfo.infoHash);
       return;
@@ -287,7 +287,7 @@ class App {
     // Download
     const downloadPath = getSetting('animeDownloadPath') || 'downloads/anime';
     try {
-      await downloadTorrent(torrentInfo, fileIndices, { downloadDir: downloadPath });
+      await downloadTorrent(torrentInfo, selection, { downloadDir: downloadPath });
     } catch (err) {
       console.log(error(`Download failed: ${err.message}`));
     }

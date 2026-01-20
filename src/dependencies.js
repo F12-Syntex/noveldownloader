@@ -41,6 +41,16 @@ const DEPENDENCIES = {
         wingetId: 'calibre.calibre',
         downloadUrl: 'https://calibre-ebook.com/download',
         formats: ['AZW3', 'MOBI']
+    },
+    ffmpeg: {
+        name: 'FFmpeg',
+        description: 'Video processing (required for partial/sample anime downloads)',
+        required: false,
+        checkCmd: 'ffmpeg -version',
+        wingetId: 'Gyan.FFmpeg',
+        downloadUrl: 'https://ffmpeg.org/download.html',
+        formats: ['Video Samples'],
+        postInstall: 'Make sure ffmpeg is added to your PATH'
     }
 };
 
