@@ -5,7 +5,6 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { log } from '../../logger.js';
 import {
   ContentType,
@@ -13,9 +12,8 @@ import {
   getCapabilitiesForType
 } from '../content/types.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const SOURCES_DIR = path.join(__dirname, '..', '..', '..', 'sources');
+// Use cwd for sources directory (works in both ESM and bundled contexts)
+const SOURCES_DIR = path.join(process.cwd(), 'sources');
 
 /**
  * Infer capabilities from source configuration

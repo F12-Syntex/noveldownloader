@@ -8,9 +8,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { log } from './logger.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const SOURCES_DIR = path.join(__dirname, '..', 'sources');
+// Handle both ESM and bundled CJS contexts
+const SOURCES_DIR = path.join(process.cwd(), 'sources');
 
 // Cache of loaded sources
 let sourcesCache = null;

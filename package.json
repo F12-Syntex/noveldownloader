@@ -1,7 +1,7 @@
 {
   "name": "noveldownloader",
   "version": "1.0.2",
-  "description": "An interactive CLI program that lets users download novels into formats such as EPUB or PDF from NovelFull.",
+  "description": "An interactive CLI program that lets users download novels/manga/anime and export them to many kinds of formats, such as PDF, EPUB, MOBI, MP4, etc.",
   "type": "module",
   "main": "src/index.js",
   "bin": {
