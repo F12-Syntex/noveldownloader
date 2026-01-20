@@ -4,7 +4,11 @@
  */
 
 import inquirer from 'inquirer';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { colors, promptConfig } from '../theme/index.js';
+
+const execAsync = promisify(exec);
 
 /**
  * Wait for user to press enter
@@ -298,6 +302,66 @@ export async function searchPrompt(message, searchFn) {
   return results;
 }
 
+/**
+ * Open a native folder picker dialog
+ * @param {string} title - Dialog title
+ * @param {string} initialPath - Initial directory to open
+ * @returns {Promise<string|null>} Selected folder path or null if cancelled
+ */
+export async function folderPicker(title = 'Select Folder', initialPath = '') {
+  const platform = process.platform;
+
+  try {
+    if (platform === 'win32') {
+      // Use PowerShell to open Windows folder browser dialog
+      const psScript = `
+        Add-Type -AssemblyName System.Windows.Forms
+        $browser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $browser.Description = '${title.replace(/'/g, "''")}'
+        $browser.RootFolder = 'MyComputer'
+        ${initialPath ? `$browser.SelectedPath = '${initialPath.replace(/'/g, "''")}'` : ''}
+        $browser.ShowNewFolderButton = $true
+        $result = $browser.ShowDialog()
+        if ($result -eq 'OK') {
+          Write-Output $browser.SelectedPath
+        }
+      `.trim();
+
+      const { stdout } = await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, {
+        windowsHide: true
+      });
+
+      const selectedPath = stdout.trim();
+      return selectedPath || null;
+
+    } else if (platform === 'darwin') {
+      // macOS: Use osascript to open native folder picker
+      const script = `osascript -e 'POSIX path of (choose folder with prompt "${title}")'`;
+      const { stdout } = await execAsync(script);
+      return stdout.trim() || null;
+
+    } else {
+      // Linux: Try zenity or kdialog
+      try {
+        const { stdout } = await execAsync(`zenity --file-selection --directory --title="${title}"`);
+        return stdout.trim() || null;
+      } catch {
+        try {
+          const { stdout } = await execAsync(`kdialog --getexistingdirectory "${initialPath || '~'}" --title "${title}"`);
+          return stdout.trim() || null;
+        } catch {
+          // Fall back to manual input
+          console.log(colors.warning('No folder picker available. Please enter the path manually.'));
+          return null;
+        }
+      }
+    }
+  } catch (err) {
+    // User cancelled or error occurred
+    return null;
+  }
+}
+
 export default {
   pressEnter,
   textInput,
@@ -310,5 +374,6 @@ export default {
   rangeInput,
   parseRange,
   urlInput,
-  searchPrompt
+  searchPrompt,
+  folderPicker
 };

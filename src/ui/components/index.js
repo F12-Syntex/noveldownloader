@@ -49,7 +49,8 @@ export {
   rangeInput,
   parseRange,
   urlInput,
-  searchPrompt
+  searchPrompt,
+  folderPicker
 } from './prompt.js';
 
 // Status components

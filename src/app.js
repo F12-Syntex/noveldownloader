@@ -43,7 +43,8 @@ import {
   saveSettings,
   getSettings,
   getSetting,
-  setSetting
+  setSetting,
+  resolvePath
 } from './settings.js';
 import { checkAllDependencies, displayDependencyStatus } from './dependencies.js';
 
@@ -56,12 +57,15 @@ const settingsManager = {
     const DEFAULT_SETTINGS = {
       detailedLogs: false,
       delayBetweenChapters: 400,
+      basePath: '',
+      downloadPath: 'downloads',
+      dataPath: 'data',
+      exportPath: 'exports',
+      tempPath: 'temp',
       animeDownloadPath: 'downloads/anime',
       minSeeders: 1,
       preferredQuality: '1080p',
-      trustedOnly: false,
-      downloadPath: 'downloads',
-      exportPath: 'exports'
+      trustedOnly: false
     };
     await saveSettings(DEFAULT_SETTINGS);
     return DEFAULT_SETTINGS;
@@ -285,7 +289,7 @@ class App {
     }
 
     // Download
-    const downloadPath = getSetting('animeDownloadPath') || 'downloads/anime';
+    const downloadPath = resolvePath(getSetting('animeDownloadPath') || 'downloads/anime');
     try {
       await downloadTorrent(torrentInfo, selection, { downloadDir: downloadPath });
     } catch (err) {

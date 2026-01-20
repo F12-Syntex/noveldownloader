@@ -10,11 +10,24 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as storage from './storage.js';
 import { log } from './logger.js';
+import { getSetting, resolvePath } from './settings.js';
 import chalk from 'chalk';
 
 const execAsync = promisify(exec);
-const EXPORT_DIR = 'exports';
-const TEMP_DIR = 'temp';
+
+/**
+ * Get export directory from settings (resolved with base path)
+ */
+function getExportDir() {
+    return resolvePath(getSetting('exportPath') || 'exports');
+}
+
+/**
+ * Get temp directory from settings (resolved with base path)
+ */
+function getTempDir() {
+    return resolvePath(getSetting('tempPath') || 'temp');
+}
 
 /**
  * Update a single line in the console
@@ -29,8 +42,8 @@ function updateLine(text) {
  * Ensure directories exist
  */
 async function ensureExportDir() {
-    await fs.mkdir(EXPORT_DIR, { recursive: true });
-    await fs.mkdir(TEMP_DIR, { recursive: true });
+    await fs.mkdir(getExportDir(), { recursive: true });
+    await fs.mkdir(getTempDir(), { recursive: true });
 }
 
 /**
@@ -115,7 +128,7 @@ async function prepareNovelForExport(novelName, format) {
 
     const markdown = generateMarkdown(novel, chapters);
     const safeName = safeFilename(novel.title);
-    const mdPath = path.join(TEMP_DIR, `${safeName}.md`);
+    const mdPath = path.join(getTempDir(), `${safeName}.md`);
 
     await fs.writeFile(mdPath, markdown, 'utf-8');
 
@@ -246,8 +259,8 @@ export async function exportToEpub(novelName) {
     // Generate markdown
     const markdown = generateMarkdown(novel, chapters);
     const safeName = safeFilename(novel.title);
-    const mdPath = path.join(TEMP_DIR, `${safeName}.md`);
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.epub`);
+    const mdPath = path.join(getTempDir(), `${safeName}.md`);
+    const outputPath = path.join(getExportDir(), `${safeName}.epub`);
 
     await fs.writeFile(mdPath, markdown, 'utf-8');
 
@@ -331,8 +344,8 @@ export async function exportToPdf(novelName) {
     // Generate markdown
     const markdown = generateMarkdown(novel, chapters);
     const safeName = safeFilename(novel.title);
-    const mdPath = path.join(TEMP_DIR, `${safeName}.md`);
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.pdf`);
+    const mdPath = path.join(getTempDir(), `${safeName}.md`);
+    const outputPath = path.join(getExportDir(), `${safeName}.pdf`);
 
     await fs.writeFile(mdPath, markdown, 'utf-8');
 
@@ -344,7 +357,7 @@ export async function exportToPdf(novelName) {
 \\setCJKsansfont{Microsoft YaHei}
 \\setCJKmonofont{Microsoft YaHei}
 `;
-    const headerPath = path.join(TEMP_DIR, `${safeName}_header.tex`);
+    const headerPath = path.join(getTempDir(), `${safeName}_header.tex`);
     await fs.writeFile(headerPath, latexHeader, 'utf-8');
 
     try {
@@ -408,7 +421,7 @@ export async function exportToPdf(novelName) {
  */
 export async function exportToDocx(novelName) {
     const { novel, chapters, safeName, mdPath } = await prepareNovelForExport(novelName, 'DOCX');
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.docx`);
+    const outputPath = path.join(getExportDir(), `${safeName}.docx`);
 
     updateLine(chalk.gray('Running pandoc...'));
 
@@ -430,7 +443,7 @@ export async function exportToDocx(novelName) {
  */
 export async function exportToOdt(novelName) {
     const { novel, chapters, safeName, mdPath } = await prepareNovelForExport(novelName, 'ODT');
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.odt`);
+    const outputPath = path.join(getExportDir(), `${safeName}.odt`);
 
     updateLine(chalk.gray('Running pandoc...'));
 
@@ -452,7 +465,7 @@ export async function exportToOdt(novelName) {
  */
 export async function exportToHtml(novelName) {
     const { novel, chapters, safeName, mdPath } = await prepareNovelForExport(novelName, 'HTML');
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.html`);
+    const outputPath = path.join(getExportDir(), `${safeName}.html`);
 
     updateLine(chalk.gray('Running pandoc...'));
 
@@ -482,7 +495,7 @@ export async function exportToHtml(novelName) {
  */
 export async function exportToTxt(novelName) {
     const { novel, chapters, safeName, mdPath } = await prepareNovelForExport(novelName, 'TXT');
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.txt`);
+    const outputPath = path.join(getExportDir(), `${safeName}.txt`);
 
     updateLine(chalk.gray('Running pandoc...'));
 
@@ -504,7 +517,7 @@ export async function exportToTxt(novelName) {
  */
 export async function exportToRtf(novelName) {
     const { novel, chapters, safeName, mdPath } = await prepareNovelForExport(novelName, 'RTF');
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.rtf`);
+    const outputPath = path.join(getExportDir(), `${safeName}.rtf`);
 
     updateLine(chalk.gray('Running pandoc...'));
 
@@ -531,8 +544,8 @@ export async function exportToAzw3(novelName) {
     }
 
     const { novel, chapters, safeName, mdPath } = await prepareNovelForExport(novelName, 'AZW3');
-    const epubPath = path.join(TEMP_DIR, `${safeName}.epub`);
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.azw3`);
+    const epubPath = path.join(getTempDir(), `${safeName}.epub`);
+    const outputPath = path.join(getExportDir(), `${safeName}.azw3`);
 
     // Check for cover image
     const coverPath = await storage.getCoverPath(novelName);
@@ -580,8 +593,8 @@ export async function exportToMobi(novelName) {
     }
 
     const { novel, chapters, safeName, mdPath } = await prepareNovelForExport(novelName, 'MOBI');
-    const epubPath = path.join(TEMP_DIR, `${safeName}.epub`);
-    const outputPath = path.join(EXPORT_DIR, `${safeName}.mobi`);
+    const epubPath = path.join(getTempDir(), `${safeName}.epub`);
+    const outputPath = path.join(getExportDir(), `${safeName}.mobi`);
 
     // Check for cover image
     const coverPath = await storage.getCoverPath(novelName);
@@ -626,7 +639,7 @@ export async function listExports() {
     await ensureExportDir();
 
     try {
-        const files = await fs.readdir(EXPORT_DIR);
+        const files = await fs.readdir(getExportDir());
         const exports = [];
 
         const supportedFormats = ['.epub', '.pdf', '.docx', '.odt', '.html', '.txt', '.rtf', '.azw3', '.mobi'];
@@ -634,7 +647,7 @@ export async function listExports() {
         for (const file of files) {
             const ext = path.extname(file).toLowerCase();
             if (supportedFormats.includes(ext)) {
-                const filePath = path.join(EXPORT_DIR, file);
+                const filePath = path.join(getExportDir(), file);
                 const stats = await fs.stat(filePath);
                 exports.push({
                     filename: file,

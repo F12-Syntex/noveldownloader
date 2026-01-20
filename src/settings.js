@@ -11,6 +11,12 @@ const SETTINGS_FILE = 'settings.json';
 const DEFAULT_SETTINGS = {
     detailedLogs: false,
     delayBetweenChapters: 400,
+    // Path settings
+    basePath: '', // Empty means current directory, can be absolute path like 'D:\\Media'
+    downloadPath: 'downloads',
+    dataPath: 'data',
+    exportPath: 'exports',
+    tempPath: 'temp',
     // Anime/Torrent settings
     animeDownloadPath: 'downloads/anime',
     minSeeders: 1,
@@ -63,4 +69,23 @@ export async function setSetting(key, value) {
     currentSettings[key] = value;
     await saveSettings(currentSettings);
     return currentSettings;
+}
+
+/**
+ * Resolve a path relative to the base path
+ * If the path is absolute, returns it as-is
+ * If basePath is set, joins basePath with the relative path
+ */
+export function resolvePath(relativePath) {
+    // If the path is already absolute, return it
+    if (path.isAbsolute(relativePath)) {
+        return relativePath;
+    }
+
+    const basePath = currentSettings.basePath;
+    if (basePath) {
+        return path.join(basePath, relativePath);
+    }
+
+    return relativePath;
 }

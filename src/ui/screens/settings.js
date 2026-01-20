@@ -3,6 +3,7 @@
  * Handles user preferences and configuration
  */
 
+import path from 'path';
 import {
   sectionHeader,
   settingsPanel,
@@ -14,7 +15,8 @@ import {
   success,
   error,
   warning,
-  info
+  info,
+  folderPicker
 } from '../components/index.js';
 import {
   colors,
@@ -31,7 +33,11 @@ export async function showSettings(settingsManager) {
   console.log('\n' + sectionHeader('Settings'));
   console.log('');
 
+  const settings = settingsManager.getAll();
+  const basePathDisplay = settings.basePath || '(current directory)';
+
   const choices = [
+    menuChoice('Base Path', 'basePath', basePathDisplay),
     menuChoice('Download Settings', 'download', 'Paths, rate limits, etc.'),
     menuChoice('Anime Settings', 'anime', 'Torrent, quality preferences'),
     menuChoice('Export Settings', 'export', 'Default format, output path'),
@@ -44,6 +50,9 @@ export async function showSettings(settingsManager) {
   const section = await selectMenu('Select settings section:', choices);
 
   switch (section) {
+    case 'basePath':
+      return await showBasePathSettings(settingsManager);
+
     case 'download':
       return await showDownloadSettings(settingsManager);
 
@@ -68,6 +77,74 @@ export async function showSettings(settingsManager) {
 }
 
 /**
+ * Base path settings - configure where all files are stored
+ */
+async function showBasePathSettings(settingsManager) {
+  const settings = settingsManager.getAll();
+
+  console.log('\n' + sectionHeader('Base Path Settings'));
+  console.log('');
+
+  const currentBase = settings.basePath || process.cwd();
+  console.log(info(`Current base path: ${currentBase}`));
+  console.log(colors.muted('All relative paths (downloads, data, exports) will be relative to this.'));
+  console.log('');
+
+  // Show resolved paths
+  const resolvedPaths = {
+    'Downloads': path.resolve(currentBase, settings.downloadPath || 'downloads'),
+    'Data': path.resolve(currentBase, settings.dataPath || 'data'),
+    'Exports': path.resolve(currentBase, settings.exportPath || 'exports'),
+    'Anime': path.resolve(currentBase, settings.animeDownloadPath || 'downloads/anime'),
+  };
+
+  console.log(colors.muted('Resolved paths:'));
+  for (const [name, resolvedPath] of Object.entries(resolvedPaths)) {
+    console.log(colors.muted(`  ${name}: ${resolvedPath}`));
+  }
+  console.log('');
+
+  const choices = [
+    menuChoice('Browse for folder', 'browse', 'Open folder picker'),
+    menuChoice('Enter path manually', 'manual', 'Type the path'),
+    menuChoice('Clear (use current directory)', 'clear', 'Reset to app directory'),
+    backChoice('Back')
+  ];
+
+  const action = await selectMenu('How would you like to set the base path?', choices);
+
+  switch (action) {
+    case 'browse':
+      console.log(info('Opening folder picker...'));
+      const selectedPath = await folderPicker('Select Base Folder', settings.basePath || '');
+      if (selectedPath) {
+        await settingsManager.set('basePath', selectedPath);
+        console.log(success(`Base path set to: ${selectedPath}`));
+      } else {
+        console.log(warning('No folder selected'));
+      }
+      break;
+
+    case 'manual':
+      const manualPath = await textInput('Enter base path:', {
+        default: settings.basePath || ''
+      });
+      if (manualPath !== undefined) {
+        await settingsManager.set('basePath', manualPath);
+        console.log(success(`Base path set to: ${manualPath || '(current directory)'}`));
+      }
+      break;
+
+    case 'clear':
+      await settingsManager.set('basePath', '');
+      console.log(success('Base path cleared - using current directory'));
+      break;
+  }
+
+  return action;
+}
+
+/**
  * Download settings
  */
 async function showDownloadSettings(settingsManager) {
@@ -78,6 +155,7 @@ async function showDownloadSettings(settingsManager) {
 
   const choices = [
     menuChoice('Download Path', 'downloadPath', settings.downloadPath || 'downloads'),
+    menuChoice('Data Path', 'dataPath', settings.dataPath || 'data'),
     menuChoice('Rate Limit', 'rateLimit', `${settings.rateLimit || 300}ms between requests`),
     menuChoice('Max Retries', 'maxRetries', `${settings.maxRetries || 3} attempts`),
     menuChoice('Concurrent Downloads', 'concurrent', `${settings.concurrentDownloads || 1}`),
@@ -94,6 +172,16 @@ async function showDownloadSettings(settingsManager) {
       if (newPath) {
         await settingsManager.set('downloadPath', newPath);
         console.log(success('Download path updated'));
+      }
+      break;
+
+    case 'dataPath':
+      const newDataPath = await textInput('Data path (novel/manga storage):', {
+        default: settings.dataPath || 'data'
+      });
+      if (newDataPath) {
+        await settingsManager.set('dataPath', newDataPath);
+        console.log(success('Data path updated'));
       }
       break;
 
@@ -215,6 +303,7 @@ async function showExportSettings(settingsManager) {
 
   const choices = [
     menuChoice('Export Path', 'exportPath', settings.exportPath || 'exports'),
+    menuChoice('Temp Path', 'tempPath', settings.tempPath || 'temp'),
     menuChoice('Default Format', 'defaultFormat', settings.defaultExportFormat || 'epub'),
     menuChoice('Include Metadata', 'includeMetadata', settings.includeMetadata !== false ? 'Yes' : 'No'),
     backChoice('Back')
@@ -224,12 +313,22 @@ async function showExportSettings(settingsManager) {
 
   switch (setting) {
     case 'exportPath':
-      const newPath = await textInput('Export path:', {
+      const newExportPath = await textInput('Export path:', {
         default: settings.exportPath || 'exports'
       });
-      if (newPath) {
-        await settingsManager.set('exportPath', newPath);
+      if (newExportPath) {
+        await settingsManager.set('exportPath', newExportPath);
         console.log(success('Export path updated'));
+      }
+      break;
+
+    case 'tempPath':
+      const newTempPath = await textInput('Temp path (for export processing):', {
+        default: settings.tempPath || 'temp'
+      });
+      if (newTempPath) {
+        await settingsManager.set('tempPath', newTempPath);
+        console.log(success('Temp path updated'));
       }
       break;
 

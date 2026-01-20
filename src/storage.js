@@ -6,8 +6,14 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { log } from './logger.js';
+import { getSetting, resolvePath } from './settings.js';
 
-const DATA_DIR = 'data';
+/**
+ * Get data directory from settings (resolved with base path)
+ */
+function getDataDir() {
+    return resolvePath(getSetting('dataPath') || 'data');
+}
 
 /**
  * Sanitize a string for use as a directory name
@@ -23,14 +29,14 @@ export function sanitizeName(name) {
  * Get the directory path for a novel
  */
 export function getNovelDir(novelName) {
-    return path.join(DATA_DIR, sanitizeName(novelName));
+    return path.join(getDataDir(), sanitizeName(novelName));
 }
 
 /**
  * Ensure the data directory structure exists
  */
 export async function ensureDataDir() {
-    await fs.mkdir(DATA_DIR, { recursive: true });
+    await fs.mkdir(getDataDir(), { recursive: true });
 }
 
 /**
@@ -40,13 +46,13 @@ export async function getAllDownloads() {
     await ensureDataDir();
 
     try {
-        const entries = await fs.readdir(DATA_DIR, { withFileTypes: true });
+        const entries = await fs.readdir(getDataDir(), { withFileTypes: true });
         const novels = [];
 
         for (const entry of entries) {
             if (!entry.isDirectory()) continue;
 
-            const metaPath = path.join(DATA_DIR, entry.name, 'meta.json');
+            const metaPath = path.join(getDataDir(), entry.name, 'meta.json');
             try {
                 const metaContent = await fs.readFile(metaPath, 'utf-8');
                 const meta = JSON.parse(metaContent);
@@ -71,7 +77,7 @@ export async function getAllDownloads() {
  * Get a specific novel by directory name
  */
 export async function getNovel(dirName) {
-    const metaPath = path.join(DATA_DIR, dirName, 'meta.json');
+    const metaPath = path.join(getDataDir(), dirName, 'meta.json');
     try {
         const metaContent = await fs.readFile(metaPath, 'utf-8');
         return JSON.parse(metaContent);
