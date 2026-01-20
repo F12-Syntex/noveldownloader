@@ -1,11 +1,12 @@
 /**
  * Torrent Download Module
- * Handles downloading torrents using WebTorrent
+ * Handles downloading torrents using torrent-stream (traditional BitTorrent)
  */
 
-import WebTorrent from 'webtorrent';
+import torrentStream from 'torrent-stream';
 import path from 'path';
 import fs from 'fs/promises';
+import { createWriteStream } from 'fs';
 import { log } from './logger.js';
 import { isVideoFile, formatSize } from './nyaa.js';
 import * as ui from './ui.js';
@@ -30,46 +31,8 @@ const TRACKERS = [
     'http://tracker.anirena.com:80/announce'
 ];
 
-// Singleton client instance
-let client = null;
-
-/**
- * Get or create WebTorrent client with optimized settings
- */
-function getClient() {
-    if (!client) {
-        client = new WebTorrent({
-            maxConns: 100,        // Max connections per torrent
-            tracker: true,        // Enable trackers
-            dht: true,           // Enable DHT
-            lsd: true,           // Enable Local Service Discovery
-            webSeeds: true       // Enable WebSeeds
-        });
-
-        client.on('error', (err) => {
-            log.error('WebTorrent client error', { error: err.message });
-        });
-
-        log.debug('WebTorrent client created with optimized settings');
-    }
-    return client;
-}
-
-/**
- * Add trackers to a magnet link if not present
- */
-function enhanceMagnet(magnetLink) {
-    if (!magnetLink.startsWith('magnet:')) return magnetLink;
-
-    // Add trackers to the magnet link
-    let enhanced = magnetLink;
-    for (const tracker of TRACKERS) {
-        if (!enhanced.includes(encodeURIComponent(tracker))) {
-            enhanced += `&tr=${encodeURIComponent(tracker)}`;
-        }
-    }
-    return enhanced;
-}
+// Active engines for cleanup
+const activeEngines = new Map();
 
 /**
  * Ensure download directory exists
@@ -84,50 +47,50 @@ async function ensureDownloadDir(dir) {
  */
 export async function getTorrentFiles(magnetOrTorrent, timeout = 30000) {
     return new Promise((resolve, reject) => {
-        const client = getClient();
-
         const timeoutId = setTimeout(() => {
+            if (engine) engine.destroy();
             reject(new Error('Timeout while fetching torrent metadata'));
         }, timeout);
 
-        // Enhance magnet link with additional trackers
-        const enhancedMagnet = enhanceMagnet(magnetOrTorrent);
+        const engine = torrentStream(magnetOrTorrent, {
+            trackers: TRACKERS,
+            tmp: DEFAULT_DOWNLOAD_DIR,
+            connections: 100,
+            uploads: 0,      // Don't upload while just getting metadata
+            verify: true,
+            dht: true
+        });
 
-        const opts = {
-            path: DEFAULT_DOWNLOAD_DIR,
-            destroyStoreOnDestroy: true,
-            announce: TRACKERS, // Add trackers to the torrent
-        };
-
-        client.add(enhancedMagnet, opts, (torrent) => {
+        engine.on('ready', () => {
             clearTimeout(timeoutId);
 
-            // Deselect all files initially (don't download)
-            torrent.files.forEach(file => {
-                file.deselect();
-            });
-
-            const files = torrent.files.map((file, index) => ({
+            const files = engine.files.map((file, index) => ({
                 index,
                 name: file.name,
                 path: file.path,
                 size: file.length,
                 sizeFormatted: formatSize(file.length),
                 isVideo: isVideoFile(file.name),
+                _file: file  // Keep reference for downloading
             }));
 
-            // Store torrent reference for later use
+            const totalSize = engine.files.reduce((sum, f) => sum + f.length, 0);
+
+            // Store engine for later use
+            const infoHash = engine.infoHash;
+            activeEngines.set(infoHash, engine);
+
             resolve({
-                infoHash: torrent.infoHash,
-                name: torrent.name,
-                totalSize: torrent.length,
-                totalSizeFormatted: formatSize(torrent.length),
+                infoHash,
+                name: engine.torrent.name,
+                totalSize,
+                totalSizeFormatted: formatSize(totalSize),
                 files,
-                torrent, // Keep reference for downloading
+                engine, // Keep reference for downloading
             });
         });
 
-        client.on('error', (err) => {
+        engine.on('error', (err) => {
             clearTimeout(timeoutId);
             reject(err);
         });
@@ -145,86 +108,103 @@ export async function downloadFiles(torrentInfo, fileIndices, options = {}) {
 
     await ensureDownloadDir(downloadDir);
 
-    const torrent = torrentInfo.torrent;
+    const engine = torrentInfo.engine;
 
-    if (!torrent) {
-        throw new Error('No torrent reference available');
+    if (!engine) {
+        throw new Error('No torrent engine available');
     }
 
-    // Deselect all files first
-    torrent.files.forEach(file => {
-        file.deselect();
-    });
-
-    // Select only the files we want
-    const selectedFiles = [];
-    for (const index of fileIndices) {
-        if (index >= 0 && index < torrent.files.length) {
-            const file = torrent.files[index];
-            file.select();
-            selectedFiles.push({
-                index,
-                name: file.name,
-                path: file.path,
-                size: file.length,
-            });
-        }
-    }
+    // Get selected files
+    const selectedFiles = fileIndices
+        .filter(idx => idx >= 0 && idx < torrentInfo.files.length)
+        .map(idx => torrentInfo.files[idx]);
 
     if (selectedFiles.length === 0) {
         throw new Error('No valid files selected');
     }
 
-    log.info(`Downloading ${selectedFiles.length} file(s)`);
+    const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+    log.info(`Downloading ${selectedFiles.length} file(s), total: ${formatSize(totalSize)}`);
 
     return new Promise((resolve, reject) => {
-        let lastProgress = 0;
+        let downloadedBytes = 0;
+        let completedFiles = 0;
+        const downloadedFiles = [];
+
+        // Start downloading each selected file
+        for (const fileInfo of selectedFiles) {
+            const file = fileInfo._file;
+            const outputPath = path.join(downloadDir, torrentInfo.name, file.path);
+
+            // Ensure directory exists
+            const outputDir = path.dirname(outputPath);
+            fs.mkdir(outputDir, { recursive: true }).then(() => {
+                // Create read stream from torrent
+                const readStream = file.createReadStream();
+                const writeStream = createWriteStream(outputPath);
+
+                readStream.on('data', (chunk) => {
+                    downloadedBytes += chunk.length;
+                });
+
+                readStream.on('error', (err) => {
+                    log.error(`Error reading file: ${file.name}`, { error: err.message });
+                });
+
+                writeStream.on('error', (err) => {
+                    log.error(`Error writing file: ${file.name}`, { error: err.message });
+                });
+
+                writeStream.on('finish', () => {
+                    completedFiles++;
+                    downloadedFiles.push({
+                        name: file.name,
+                        path: outputPath,
+                        size: file.length
+                    });
+
+                    if (completedFiles === selectedFiles.length) {
+                        log.info('Download complete', { files: downloadedFiles.map(f => f.name) });
+                        resolve({
+                            success: true,
+                            files: downloadedFiles,
+                            totalSize
+                        });
+                    }
+                });
+
+                readStream.pipe(writeStream);
+            });
+        }
 
         // Progress tracking
         const progressInterval = setInterval(() => {
-            const progress = Math.round(torrent.progress * 100);
-            const downloaded = torrent.downloaded;
-            const speed = torrent.downloadSpeed;
-            const peers = torrent.numPeers;
+            const progress = Math.round((downloadedBytes / totalSize) * 100);
+            const speed = engine.swarm.downloadSpeed();
+            const peers = engine.swarm.wires.length;
 
-            if (progress !== lastProgress || onProgress) {
-                lastProgress = progress;
+            if (onProgress) {
+                onProgress({
+                    progress: Math.min(progress, 100),
+                    downloaded: downloadedBytes,
+                    downloadedFormatted: formatSize(downloadedBytes),
+                    speed,
+                    speedFormatted: formatSize(speed) + '/s',
+                    peers,
+                    eta: speed > 0 ? Math.round((totalSize - downloadedBytes) / speed) : null,
+                });
+            }
 
-                if (onProgress) {
-                    onProgress({
-                        progress,
-                        downloaded,
-                        downloadedFormatted: formatSize(downloaded),
-                        speed,
-                        speedFormatted: formatSize(speed) + '/s',
-                        peers,
-                        eta: speed > 0 ? Math.round((torrent.length - downloaded) / speed) : null,
-                    });
-                }
+            // Check if done
+            if (completedFiles === selectedFiles.length) {
+                clearInterval(progressInterval);
             }
         }, 1000);
 
-        torrent.on('done', () => {
+        // Handle errors
+        engine.on('error', (err) => {
             clearInterval(progressInterval);
-
-            // Get final file paths
-            const downloadedFiles = selectedFiles.map(f => ({
-                name: f.name,
-                path: path.join(downloadDir, torrent.name, f.path),
-                size: f.size,
-            }));
-
-            log.info('Download complete', { files: downloadedFiles.map(f => f.name) });
-            resolve({
-                success: true,
-                files: downloadedFiles,
-                totalSize: selectedFiles.reduce((sum, f) => sum + f.size, 0),
-            });
-        });
-
-        torrent.on('error', (err) => {
-            clearInterval(progressInterval);
-            log.error('Torrent download error', { error: err.message });
+            log.error('Torrent engine error', { error: err.message });
             reject(err);
         });
     });
@@ -241,84 +221,100 @@ export async function downloadTorrent(magnetOrTorrent, options = {}) {
 
     await ensureDownloadDir(downloadDir);
 
-    // Enhance magnet link with additional trackers
-    const enhancedMagnet = enhanceMagnet(magnetOrTorrent);
-
     return new Promise((resolve, reject) => {
-        const client = getClient();
-
-        const opts = {
+        const engine = torrentStream(magnetOrTorrent, {
+            trackers: TRACKERS,
             path: downloadDir,
-            announce: TRACKERS, // Add trackers to the torrent
-        };
-
-        client.add(enhancedMagnet, opts, (torrent) => {
-            log.info(`Started downloading: ${torrent.name}`);
-
-            let lastProgress = 0;
-
-            const progressInterval = setInterval(() => {
-                const progress = Math.round(torrent.progress * 100);
-                const downloaded = torrent.downloaded;
-                const speed = torrent.downloadSpeed;
-                const peers = torrent.numPeers;
-
-                if (progress !== lastProgress || onProgress) {
-                    lastProgress = progress;
-
-                    if (onProgress) {
-                        onProgress({
-                            progress,
-                            downloaded,
-                            downloadedFormatted: formatSize(downloaded),
-                            speed,
-                            speedFormatted: formatSize(speed) + '/s',
-                            peers,
-                            eta: speed > 0 ? Math.round((torrent.length - downloaded) / speed) : null,
-                        });
-                    }
-                }
-            }, 1000);
-
-            torrent.on('done', () => {
-                clearInterval(progressInterval);
-
-                const files = torrent.files.map(f => ({
-                    name: f.name,
-                    path: path.join(downloadDir, torrent.name, f.path),
-                    size: f.length,
-                }));
-
-                log.info('Download complete', { name: torrent.name });
-                resolve({
-                    success: true,
-                    name: torrent.name,
-                    files,
-                    totalSize: torrent.length,
-                });
-            });
-
-            torrent.on('error', (err) => {
-                clearInterval(progressInterval);
-                reject(err);
-            });
+            connections: 100,
+            verify: true,
+            dht: true
         });
 
-        client.on('error', (err) => {
+        engine.on('ready', () => {
+            log.info(`Started downloading: ${engine.torrent.name}`);
+
+            const totalSize = engine.files.reduce((sum, f) => sum + f.length, 0);
+            let downloadedBytes = 0;
+            let completedFiles = 0;
+            const downloadedFiles = [];
+
+            // Download all files
+            for (const file of engine.files) {
+                const outputPath = path.join(downloadDir, engine.torrent.name, file.path);
+                const outputDir = path.dirname(outputPath);
+
+                fs.mkdir(outputDir, { recursive: true }).then(() => {
+                    const readStream = file.createReadStream();
+                    const writeStream = createWriteStream(outputPath);
+
+                    readStream.on('data', (chunk) => {
+                        downloadedBytes += chunk.length;
+                    });
+
+                    writeStream.on('finish', () => {
+                        completedFiles++;
+                        downloadedFiles.push({
+                            name: file.name,
+                            path: outputPath,
+                            size: file.length
+                        });
+
+                        if (completedFiles === engine.files.length) {
+                            log.info('Download complete', { name: engine.torrent.name });
+                            engine.destroy();
+                            resolve({
+                                success: true,
+                                name: engine.torrent.name,
+                                files: downloadedFiles,
+                                totalSize
+                            });
+                        }
+                    });
+
+                    readStream.pipe(writeStream);
+                });
+            }
+
+            // Progress tracking
+            const progressInterval = setInterval(() => {
+                const progress = Math.round((downloadedBytes / totalSize) * 100);
+                const speed = engine.swarm.downloadSpeed();
+                const peers = engine.swarm.wires.length;
+
+                if (onProgress) {
+                    onProgress({
+                        progress: Math.min(progress, 100),
+                        downloaded: downloadedBytes,
+                        downloadedFormatted: formatSize(downloadedBytes),
+                        speed,
+                        speedFormatted: formatSize(speed) + '/s',
+                        peers,
+                        eta: speed > 0 ? Math.round((totalSize - downloadedBytes) / speed) : null,
+                    });
+                }
+
+                if (completedFiles === engine.files.length) {
+                    clearInterval(progressInterval);
+                }
+            }, 1000);
+        });
+
+        engine.on('error', (err) => {
+            log.error('Torrent download error', { error: err.message });
             reject(err);
         });
     });
 }
 
 /**
- * Remove a torrent from client
+ * Remove a torrent from active engines
  */
 export function removeTorrent(infoHash) {
-    const client = getClient();
-    const torrent = client.get(infoHash);
+    const engine = activeEngines.get(infoHash);
 
-    if (torrent) {
-        torrent.destroy();
+    if (engine) {
+        engine.destroy();
+        activeEngines.delete(infoHash);
         log.debug(`Removed torrent: ${infoHash}`);
         return true;
     }
@@ -329,29 +325,28 @@ export function removeTorrent(infoHash) {
  * Get active downloads
  */
 export function getActiveDownloads() {
-    const client = getClient();
-    return client.torrents.map(t => ({
-        infoHash: t.infoHash,
-        name: t.name,
-        progress: Math.round(t.progress * 100),
-        downloadSpeed: t.downloadSpeed,
-        uploadSpeed: t.uploadSpeed,
-        numPeers: t.numPeers,
-        downloaded: t.downloaded,
-        uploaded: t.uploaded,
-        done: t.done,
-    }));
+    const downloads = [];
+    for (const [infoHash, engine] of activeEngines) {
+        downloads.push({
+            infoHash,
+            name: engine.torrent?.name || 'Unknown',
+            downloadSpeed: engine.swarm.downloadSpeed(),
+            uploadSpeed: engine.swarm.uploadSpeed(),
+            numPeers: engine.swarm.wires.length,
+        });
+    }
+    return downloads;
 }
 
 /**
- * Stop all downloads and destroy client
+ * Stop all downloads and destroy engines
  */
 export function destroyClient() {
-    if (client) {
-        client.destroy();
-        client = null;
-        log.debug('WebTorrent client destroyed');
+    for (const [infoHash, engine] of activeEngines) {
+        engine.destroy();
     }
+    activeEngines.clear();
+    log.debug('All torrent engines destroyed');
 }
 
 /**

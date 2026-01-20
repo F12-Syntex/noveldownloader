@@ -1,4 +1,8 @@
 {
   "detailedLogs": false,
-  "delayBetweenChapters": 400
+  "delayBetweenChapters": 400,
+  "animeDownloadPath": "downloads/anime",
+  "minSeeders": 20,
+  "preferredQuality": "1080p",
+  "trustedOnly": false
 }
