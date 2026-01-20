@@ -98,12 +98,42 @@ export async function getTorrentFiles(magnetOrTorrent, timeout = 30000) {
 }
 
 /**
+ * Estimate bytes needed for a video segment
+ * @param {number} fileSize - Total file size in bytes
+ * @param {number} duration - Desired duration in seconds
+ * @param {number} estimatedTotalDuration - Estimated total video duration (default: based on size)
+ * @returns {number} Estimated bytes needed
+ */
+function estimateBytesForDuration(fileSize, duration, estimatedTotalDuration = null) {
+    // Estimate total duration if not provided
+    // Assume ~5 Mbps average bitrate for anime (reasonable for 720p-1080p)
+    // 5 Mbps = 625 KB/s = 37.5 MB/min
+    if (!estimatedTotalDuration) {
+        const avgBitrateBps = 5 * 1024 * 1024 / 8; // 5 Mbps in bytes/sec
+        estimatedTotalDuration = fileSize / avgBitrateBps;
+    }
+
+    // Calculate bytes per second for this file
+    const bytesPerSecond = fileSize / estimatedTotalDuration;
+
+    // Add 50% buffer for keyframes and overhead
+    const bytesNeeded = Math.ceil(bytesPerSecond * duration * 1.5);
+
+    // Minimum 50MB, maximum full file
+    return Math.min(fileSize, Math.max(50 * 1024 * 1024, bytesNeeded));
+}
+
+/**
  * Download specific files from a torrent
+ * @param {Object} torrentInfo - Torrent info
+ * @param {number[]} fileIndices - File indices to download
+ * @param {Object} options - Download options
  */
 export async function downloadFiles(torrentInfo, fileIndices, options = {}) {
     const {
         downloadDir = DEFAULT_DOWNLOAD_DIR,
         onProgress = null,
+        partialDownload = null,  // { duration: 30, timestamp: 0 or 'random' }
     } = options;
 
     await ensureDownloadDir(downloadDir);
@@ -123,28 +153,61 @@ export async function downloadFiles(torrentInfo, fileIndices, options = {}) {
         throw new Error('No valid files selected');
     }
 
-    const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
-    log.info(`Downloading ${selectedFiles.length} file(s), total: ${formatSize(totalSize)}`);
+    // Calculate total size - for partial downloads, estimate needed bytes
+    let totalSize;
+    let isPartial = false;
+    const videoExtensions = ['.mkv', '.mp4', '.avi', '.webm', '.mov'];
+
+    if (partialDownload) {
+        isPartial = true;
+        totalSize = 0;
+        for (const f of selectedFiles) {
+            const isVideo = videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext));
+            if (isVideo && partialDownload.duration) {
+                // Estimate bytes needed for the segment
+                totalSize += estimateBytesForDuration(f.size, partialDownload.duration);
+            } else {
+                totalSize += f.size;
+            }
+        }
+        log.info(`Partial download: ~${formatSize(totalSize)} for ${partialDownload.duration}s segment`);
+    } else {
+        totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+    }
+
+    log.info(`Downloading ${selectedFiles.length} file(s), target: ${formatSize(totalSize)}`);
 
     return new Promise((resolve, reject) => {
         let downloadedBytes = 0;
         let completedFiles = 0;
         const downloadedFiles = [];
+        let progressInterval;
 
         // Start downloading each selected file
         for (const fileInfo of selectedFiles) {
             const file = fileInfo._file;
             const outputPath = path.join(downloadDir, torrentInfo.name, file.path);
+            const isVideo = videoExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+
+            // Calculate how much to download
+            let bytesToDownload = file.length;
+            if (isPartial && isVideo && partialDownload?.duration) {
+                bytesToDownload = estimateBytesForDuration(file.length, partialDownload.duration);
+            }
 
             // Ensure directory exists
             const outputDir = path.dirname(outputPath);
             fs.mkdir(outputDir, { recursive: true }).then(() => {
-                // Create read stream from torrent
-                const readStream = file.createReadStream();
+                // Create read stream - with byte limit for partial downloads
+                const streamOptions = isPartial && isVideo ? { start: 0, end: bytesToDownload - 1 } : {};
+                const readStream = file.createReadStream(streamOptions);
                 const writeStream = createWriteStream(outputPath);
+
+                let fileBytesDownloaded = 0;
 
                 readStream.on('data', (chunk) => {
                     downloadedBytes += chunk.length;
+                    fileBytesDownloaded += chunk.length;
                 });
 
                 readStream.on('error', (err) => {
@@ -160,25 +223,29 @@ export async function downloadFiles(torrentInfo, fileIndices, options = {}) {
                     downloadedFiles.push({
                         name: file.name,
                         path: outputPath,
-                        size: file.length
+                        size: fileBytesDownloaded,
+                        fullSize: file.length,
+                        isPartial: isPartial && isVideo
                     });
 
                     if (completedFiles === selectedFiles.length) {
+                        if (progressInterval) clearInterval(progressInterval);
                         log.info('Download complete', { files: downloadedFiles.map(f => f.name) });
                         resolve({
                             success: true,
                             files: downloadedFiles,
-                            totalSize
+                            totalSize: downloadedBytes,
+                            isPartial
                         });
                     }
                 });
 
                 readStream.pipe(writeStream);
-            });
+            }).catch(reject);
         }
 
         // Progress tracking
-        const progressInterval = setInterval(() => {
+        progressInterval = setInterval(() => {
             const progress = Math.round((downloadedBytes / totalSize) * 100);
             const speed = engine.swarm.downloadSpeed();
             const peers = engine.swarm.wires.length;
@@ -188,10 +255,13 @@ export async function downloadFiles(torrentInfo, fileIndices, options = {}) {
                     progress: Math.min(progress, 100),
                     downloaded: downloadedBytes,
                     downloadedFormatted: formatSize(downloadedBytes),
+                    totalSize,
+                    totalFormatted: formatSize(totalSize),
                     speed,
                     speedFormatted: formatSize(speed) + '/s',
                     peers,
                     eta: speed > 0 ? Math.round((totalSize - downloadedBytes) / speed) : null,
+                    isPartial
                 });
             }
 
@@ -203,7 +273,7 @@ export async function downloadFiles(torrentInfo, fileIndices, options = {}) {
 
         // Handle errors
         engine.on('error', (err) => {
-            clearInterval(progressInterval);
+            if (progressInterval) clearInterval(progressInterval);
             log.error('Torrent engine error', { error: err.message });
             reject(err);
         });

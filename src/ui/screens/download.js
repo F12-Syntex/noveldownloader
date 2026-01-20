@@ -429,13 +429,28 @@ export async function downloadTorrent(torrentInfo, selection, options = {}) {
     console.log(info(`Mode: ${modeDesc}`));
   }
 
+  // For partial downloads, show estimated size
+  if (downloadMode.mode !== 'full') {
+    console.log(info(`Estimated download: ~50-150 MB for ${downloadMode.duration}s sample`));
+  }
+
   console.log(info(`Downloading ${fileIndices.length} file(s)...`));
   console.log('');
 
-  const results = await handler.downloadFiles(torrentInfo, fileIndices, {
+  // Pass partial download options to the handler
+  const downloadOptions = {
     downloadDir: options.downloadDir,
     onProgress: showTorrentProgress
-  });
+  };
+
+  if (downloadMode.mode !== 'full') {
+    downloadOptions.partialDownload = {
+      duration: downloadMode.duration,
+      timestamp: downloadMode.timestamp
+    };
+  }
+
+  const results = await handler.downloadFiles(torrentInfo, fileIndices, downloadOptions);
 
   console.log(''); // New line after progress
 

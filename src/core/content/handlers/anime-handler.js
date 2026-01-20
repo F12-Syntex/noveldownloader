@@ -183,14 +183,16 @@ export class AnimeHandler {
   async downloadFiles(torrentInfo, fileIndices, options = {}) {
     const {
       downloadDir,
-      onProgress
+      onProgress,
+      partialDownload
     } = options;
 
-    log.debug(`AnimeHandler: Downloading ${fileIndices.length} files`);
+    log.debug(`AnimeHandler: Downloading ${fileIndices.length} files${partialDownload ? ` (partial: ${partialDownload.duration}s)` : ''}`);
 
     return await torrent.downloadFiles(torrentInfo, fileIndices, {
       downloadDir,
-      onProgress
+      onProgress,
+      partialDownload
     });
   }
 
