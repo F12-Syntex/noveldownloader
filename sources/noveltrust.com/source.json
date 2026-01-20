@@ -1,0 +1,147 @@
+{
+    "name": "NovelTrust",
+    "id": "noveltrust.com",
+    "baseUrl": "https://noveltrust.com",
+    "enabled": true,
+    "version": "1.0.0",
+
+    "http": {
+        "timeout": 15000,
+        "retryAttempts": 3,
+        "retryDelay": 1000,
+        "rateLimit": 500,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    },
+
+    "search": {
+        "type": "browse",
+        "note": "Search is JavaScript-based. Use genre browsing instead.",
+        "url": "{baseUrl}/genres/Action/1",
+        "resultSelector": ".novel-item, .novel-card, article, .book-item",
+        "fields": {
+            "title": {
+                "selector": "h3 a, h2 a, .novel-title a, a.title",
+                "attribute": "text"
+            },
+            "url": {
+                "selector": "h3 a, h2 a, .novel-title a, a.title, a[href*='/book/']",
+                "attribute": "href"
+            },
+            "author": {
+                "selector": ".author, .author a, a[href*='/author/']",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "cover": {
+                "selector": "img",
+                "attribute": "src"
+            }
+        }
+    },
+
+    "browse": {
+        "enabled": true,
+        "genres": [
+            {"name": "Action", "url": "/genres/Action"},
+            {"name": "Adventure", "url": "/genres/Adventure"},
+            {"name": "Fantasy", "url": "/genres/Fantasy"},
+            {"name": "Romance", "url": "/genres/Romance"},
+            {"name": "Martial Arts", "url": "/genres/Martial+Arts"},
+            {"name": "Xuanhuan", "url": "/genres/Xuanhuan"},
+            {"name": "Xianxia", "url": "/genres/Xianxia"},
+            {"name": "Wuxia", "url": "/genres/Wuxia"},
+            {"name": "Sci-fi", "url": "/genres/Sci-fi"},
+            {"name": "Supernatural", "url": "/genres/Supernatural"}
+        ],
+        "pagination": {
+            "type": "path",
+            "pattern": "{genreUrl}/{page}"
+        }
+    },
+
+    "novelDetails": {
+        "fields": {
+            "title": {
+                "selector": "h1, h2.novel-title, .book-title, h2",
+                "attribute": "text"
+            },
+            "cover": {
+                "selector": "img[src*='media.noveltrust.com'], .novel-cover img, .book-cover img, img[alt]",
+                "attribute": "src"
+            },
+            "author": {
+                "selector": "a[href*='/author/']",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "genres": {
+                "selector": "a[href*='/genres/']",
+                "attribute": "text",
+                "multiple": true
+            },
+            "status": {
+                "selector": ".status, .novel-status, span:contains('OnGoing'), span:contains('Completed')",
+                "attribute": "text",
+                "transform": "status"
+            },
+            "description": {
+                "selector": ".summary, .description, .novel-summary, [class*='summary'], [class*='description']",
+                "attribute": "text"
+            },
+            "ratingValue": {
+                "selector": ".rating, .novel-rating, [class*='rating']",
+                "attribute": "text"
+            }
+        }
+    },
+
+    "chapterList": {
+        "containerSelector": "a[href*='/chapter'], .chapter-item a, .chapter-list a",
+        "fields": {
+            "title": {
+                "attribute": "text"
+            },
+            "url": {
+                "attribute": "href"
+            }
+        },
+        "chapterNumberPattern": "chapter[\\s-]*(\\d+)",
+        "chapterNumberUrlPattern": "chapter-?(\\d+)",
+        "pagination": {
+            "type": "none",
+            "note": "Chapters are loaded via JavaScript pagination on the page"
+        }
+    },
+
+    "chapterContent": {
+        "titleSelectors": [
+            "h1.chapter-title",
+            ".chapter-title",
+            "h1",
+            ".chapter-heading",
+            "h2"
+        ],
+        "contentSelector": ".chapter-content, .chapter-text, #chapter-content, .content, article .entry-content",
+        "removeSelectors": [
+            "script",
+            "iframe",
+            ".ads",
+            "[id*='ads']",
+            "[class*='ads']",
+            ".advertisement",
+            "div[align='center']",
+            ".chapter-nav",
+            ".navigation",
+            ".social-share"
+        ],
+        "paragraphSelector": "p"
+    },
+
+    "notes": {
+        "searchLimitation": "This site uses JavaScript-based search. The search feature does not work with HTTP requests.",
+        "browseLimitation": "Genre browsing also uses JavaScript rendering and may not return results.",
+        "chapterListLimitation": "Chapter list is loaded via JavaScript pagination. Only the first page of chapters (typically ~40-50) will be detected.",
+        "chapterRedirect": "Chapter pages redirect to novellive.app domain which may block automated requests.",
+        "recommendation": "Use 'Enter novel URL directly' option. This source works best for getting novel metadata, but chapter downloading may be limited."
+    }
+}

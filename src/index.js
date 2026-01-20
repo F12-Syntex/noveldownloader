@@ -7,7 +7,7 @@
 
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { searchNovels, getNovelDetails } from './scraper.js';
+import { searchNovels, getNovelDetails, supportsSearch, supportsBrowse, getGenres, browseByGenre } from './scraper.js';
 import { downloadNovel, retryFailedChapters, getDownloadProgress } from './downloader.js';
 import {
     exportToEpub, exportToPdf, exportToDocx, exportToOdt,
@@ -70,6 +70,139 @@ async function mainMenu() {
 }
 
 /**
+ * Find novel by text search
+ */
+async function findNovelBySearch() {
+    const { query } = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'query',
+            message: 'Enter novel name to search:',
+            validate: (input) => input.trim().length > 0 || 'Please enter a search term'
+        }
+    ]);
+
+    console.log(chalk.gray('\nSearching...'));
+
+    const results = await searchNovels(query.trim());
+
+    if (results.length === 0) {
+        console.log(chalk.yellow('\nNo novels found. Try a different search term.'));
+        return null;
+    }
+
+    const { selectedNovel } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedNovel',
+            message: `Found ${results.length} novels. Select one:`,
+            choices: [
+                ...results.map((novel) => ({
+                    name: `${novel.title} ${chalk.gray(`by ${novel.author}`)}`,
+                    value: novel
+                })),
+                new inquirer.Separator(),
+                { name: chalk.gray('← Cancel'), value: null }
+            ],
+            pageSize: 15,
+            loop: false
+        }
+    ]);
+
+    return selectedNovel;
+}
+
+/**
+ * Find novel by browsing genres
+ */
+async function findNovelByBrowse() {
+    const genres = getGenres();
+
+    if (genres.length === 0) {
+        console.log(chalk.yellow('No genres available for browsing.'));
+        return null;
+    }
+
+    const { selectedGenre } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedGenre',
+            message: 'Select a genre to browse:',
+            choices: [
+                ...genres.map((g) => ({
+                    name: g.name,
+                    value: g
+                })),
+                new inquirer.Separator(),
+                { name: chalk.gray('← Cancel'), value: null }
+            ],
+            pageSize: 15,
+            loop: false
+        }
+    ]);
+
+    if (!selectedGenre) return null;
+
+    console.log(chalk.gray(`\nBrowsing ${selectedGenre.name}...`));
+
+    const novels = await browseByGenre(selectedGenre.url, 1);
+
+    if (novels.length === 0) {
+        console.log(chalk.yellow('\nNo novels found in this genre.'));
+        return null;
+    }
+
+    const { selectedNovel } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedNovel',
+            message: `Found ${novels.length} novels. Select one:`,
+            choices: [
+                ...novels.map((novel) => ({
+                    name: `${novel.title} ${chalk.gray(`by ${novel.author || 'Unknown'}`)}`,
+                    value: novel
+                })),
+                new inquirer.Separator(),
+                { name: chalk.gray('← Cancel'), value: null }
+            ],
+            pageSize: 15,
+            loop: false
+        }
+    ]);
+
+    return selectedNovel;
+}
+
+/**
+ * Find novel by direct URL
+ */
+async function findNovelByUrl() {
+    const activeSource = getActiveSource();
+
+    const { novelUrl } = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'novelUrl',
+            message: `Enter novel URL (e.g., ${activeSource.baseUrl}/book/novel-name):`,
+            validate: (input) => {
+                if (!input.trim()) return 'Please enter a URL';
+                if (!input.includes(activeSource.baseUrl) && !input.startsWith('/')) {
+                    return `URL must be from ${activeSource.baseUrl}`;
+                }
+                return true;
+            }
+        }
+    ]);
+
+    let url = novelUrl.trim();
+    if (url.startsWith('/')) {
+        url = activeSource.baseUrl + url;
+    }
+
+    return { url, title: 'Loading...', author: 'Unknown' };
+}
+
+/**
  * Download new novel flow
  */
 async function downloadNewNovel() {
@@ -84,47 +217,43 @@ async function downloadNewNovel() {
         return;
     }
 
-    console.log(chalk.gray(`Searching on: ${activeSource.name}\n`));
+    console.log(chalk.gray(`Source: ${activeSource.name}\n`));
 
-    // Get search query
-    const { query } = await inquirer.prompt([
+    // Build options based on source capabilities
+    const findOptions = [];
+
+    if (supportsSearch()) {
+        findOptions.push({ name: 'Search by name', value: 'search' });
+    }
+    if (supportsBrowse()) {
+        findOptions.push({ name: 'Browse by genre', value: 'browse' });
+    }
+    findOptions.push({ name: 'Enter novel URL directly', value: 'url' });
+    findOptions.push(new inquirer.Separator());
+    findOptions.push({ name: chalk.gray('← Back'), value: 'back' });
+
+    const { findMethod } = await inquirer.prompt([
         {
-            type: 'input',
-            name: 'query',
-            message: 'Enter novel name to search:',
-            validate: (input) => input.trim().length > 0 || 'Please enter a search term'
+            type: 'list',
+            name: 'findMethod',
+            message: 'How would you like to find a novel?',
+            choices: findOptions,
+            loop: false
         }
     ]);
 
-    console.log(chalk.gray('\nSearching...'));
+    if (findMethod === 'back') return;
+
+    let selectedNovel = null;
 
     try {
-        const results = await searchNovels(query.trim());
-
-        if (results.length === 0) {
-            console.log(chalk.yellow('\nNo novels found. Try a different search term.'));
-            await pressEnterToContinue();
-            return;
+        if (findMethod === 'search') {
+            selectedNovel = await findNovelBySearch();
+        } else if (findMethod === 'browse') {
+            selectedNovel = await findNovelByBrowse();
+        } else if (findMethod === 'url') {
+            selectedNovel = await findNovelByUrl();
         }
-
-        // Let user select a novel
-        const { selectedNovel } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'selectedNovel',
-                message: `Found ${results.length} novels. Select one to download:`,
-                choices: [
-                    ...results.map((novel, idx) => ({
-                        name: `${novel.title} ${chalk.gray(`by ${novel.author}`)}`,
-                        value: novel
-                    })),
-                    new inquirer.Separator(),
-                    { name: chalk.gray('← Cancel'), value: null }
-                ],
-                pageSize: 15,
-                loop: false
-            }
-        ]);
 
         if (!selectedNovel) return;
 

@@ -162,6 +162,85 @@ function extractMultipleFields($, container, fieldConfig, baseUrl) {
 }
 
 /**
+ * Check if the source supports text-based search
+ */
+export function supportsSearch(source = null) {
+    source = source || getActiveSource();
+    if (!source) return false;
+    return source.search && source.search.type !== 'browse';
+}
+
+/**
+ * Check if the source supports genre browsing
+ */
+export function supportsBrowse(source = null) {
+    source = source || getActiveSource();
+    if (!source) return false;
+    return source.browse && source.browse.enabled;
+}
+
+/**
+ * Get available genres for browsing
+ */
+export function getGenres(source = null) {
+    source = source || getActiveSource();
+    if (!source || !source.browse || !source.browse.genres) return [];
+    return source.browse.genres;
+}
+
+/**
+ * Browse novels by genre
+ */
+export async function browseByGenre(genreUrl, page = 1, source = null) {
+    source = source || getActiveSource();
+    if (!source) {
+        throw new Error('No active source configured');
+    }
+
+    const browseConfig = source.browse;
+    let url;
+
+    if (browseConfig.pagination?.type === 'path') {
+        url = `${source.baseUrl}${genreUrl}/${page}`;
+    } else if (browseConfig.pagination?.type === 'query') {
+        const param = browseConfig.pagination.param || 'page';
+        url = `${source.baseUrl}${genreUrl}?${param}=${page}`;
+    } else {
+        url = `${source.baseUrl}${genreUrl}`;
+    }
+
+    log.debug(`Browsing: ${url}`);
+
+    const html = await fetchPage(url, source);
+    const $ = cheerio.load(html);
+    const novels = [];
+
+    // Use search config selectors for consistency
+    const searchConfig = source.search;
+    $(searchConfig.resultSelector).each((_, el) => {
+        const novel = {};
+
+        for (const [fieldName, fieldConfig] of Object.entries(searchConfig.fields)) {
+            novel[fieldName] = extractField($, el, fieldConfig, source.baseUrl);
+        }
+
+        // Skip if no title or URL
+        if (!novel.title || !novel.url) return;
+
+        // Ensure URL is absolute
+        novel.url = ensureAbsoluteUrl(novel.url, source.baseUrl);
+        if (novel.cover) {
+            novel.cover = ensureAbsoluteUrl(novel.cover, source.baseUrl);
+        }
+
+        novels.push(novel);
+    });
+
+    log.debug(`Found ${novels.length} novels in genre`);
+    return novels;
+}
+
+/**
  * Search for novels by query
  */
 export async function searchNovels(query, source = null) {
@@ -171,6 +250,12 @@ export async function searchNovels(query, source = null) {
     }
 
     const searchConfig = source.search;
+
+    // Check if search is browse-type (JS-based search)
+    if (searchConfig.type === 'browse') {
+        throw new Error(`${source.name} does not support text search. Use "Browse by Genre" instead.`);
+    }
+
     const url = buildUrl(searchConfig.url, {
         baseUrl: source.baseUrl,
         query: query
