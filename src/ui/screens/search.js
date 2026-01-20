@@ -1,6 +1,7 @@
 /**
  * Search Screen
  * Handles search, browse, and URL input for all content types
+ * Includes smart episode matching for anime
  */
 
 import {
@@ -11,6 +12,7 @@ import {
   urlInput,
   searchResults,
   torrentResults,
+  confirm,
   success,
   error,
   warning,
@@ -18,15 +20,23 @@ import {
 } from '../components/index.js';
 import {
   colors,
+  icons,
   menuChoice,
   backChoice,
   getContentLabel,
   getContentIcon,
-  truncate
+  truncate,
+  formatBytes
 } from '../theme/index.js';
 import { getActiveSource } from '../../core/sources/manager.js';
 import { getHandlerForSource } from '../../core/content/index.js';
 import { ContentType, Capabilities, hasCapability } from '../../core/content/types.js';
+import {
+  parseEpisodeInput,
+  findBestTorrents,
+  formatEpisodeInfo,
+  extractEpisodesFromTitle
+} from '../../utils/episode-parser.js';
 
 /**
  * Show download method selection based on source capabilities
@@ -50,6 +60,169 @@ export async function showDownloadMethod() {
 }
 
 /**
+ * Perform anime search with smart episode matching
+ * @returns {Promise<Object|null>} Selected torrent or null
+ */
+async function performAnimeSearch() {
+  const source = getActiveSource();
+  const handler = getHandlerForSource(source);
+
+  // Get anime title
+  const titleQuery = await textInput('Search anime title:');
+  if (!titleQuery || !titleQuery.trim()) {
+    return null;
+  }
+
+  // Get episode info (optional)
+  console.log('');
+  console.log(colors.muted('Episode formats: "5", "1-12", "S2E5", "Season 2 Episode 5", or leave empty for all'));
+  const episodeInput = await textInput('Episode (optional):');
+
+  const episodeInfo = parseEpisodeInput(episodeInput);
+
+  // Build search query
+  let searchQuery = titleQuery.trim();
+
+  // If season specified, add to query for better results
+  if (episodeInfo.season !== null) {
+    searchQuery += ` Season ${episodeInfo.season}`;
+  }
+
+  console.log(colors.muted(`\nSearching for "${searchQuery}"...`));
+
+  if (episodeInfo.episodes.length > 0 || episodeInfo.season !== null) {
+    console.log(colors.muted(`Looking for: ${formatEpisodeInfo(episodeInfo)}`));
+  }
+
+  try {
+    const results = await handler.search(searchQuery, source, {});
+
+    if (!results || results.length === 0) {
+      console.log(warning('No results found. Try different search terms.'));
+      return null;
+    }
+
+    // If episode info specified, use smart matching
+    if (episodeInfo.episodes.length > 0 || episodeInfo.season !== null) {
+      return await showSmartTorrentResults(results, episodeInfo, source);
+    }
+
+    // Otherwise show regular results
+    return await showTorrentResults(results, source);
+  } catch (err) {
+    console.log(error(`Search failed: ${err.message}`));
+    return null;
+  }
+}
+
+/**
+ * Show smart-matched torrent results
+ */
+async function showSmartTorrentResults(results, episodeInfo, source) {
+  // Find best matching torrents
+  const matched = findBestTorrents(results, episodeInfo, {
+    minScore: 10,
+    limit: 15,
+    preferTrusted: true
+  });
+
+  if (matched.length === 0) {
+    console.log(warning('No torrents match your episode criteria.'));
+    console.log(colors.muted('Showing all results instead...\n'));
+    return await showTorrentResults(results, source);
+  }
+
+  // Show matched results
+  console.log('\n' + sectionHeader('Best Matches'));
+  console.log(colors.muted(`Showing torrents matching: ${formatEpisodeInfo(episodeInfo)}`));
+  console.log('');
+
+  // Display results with match info
+  matched.forEach((torrent, index) => {
+    const trust = torrent.trusted ? colors.success(icons.trusted) : '';
+    const remake = torrent.remake ? colors.error(icons.remake) : '';
+    const seeders = colors.success(`↑${torrent.seeders || 0}`);
+    const score = colors.primary(`[${torrent.matchScore}%]`);
+
+    console.log(`${colors.muted(`${index + 1}.`)} ${truncate(torrent.title, 55)} ${trust}${remake}`);
+
+    // Show episode info
+    const epInfo = torrent.episodeInfo;
+    const epStr = epInfo.episodes.length > 0
+      ? (epInfo.isBatch
+        ? `Eps ${epInfo.episodes[0]}-${epInfo.episodes[epInfo.episodes.length - 1]}`
+        : `Ep ${epInfo.episodes.join(', ')}`)
+      : 'Unknown eps';
+    const seasonStr = epInfo.season ? `S${epInfo.season}` : '';
+
+    console.log(colors.muted(`   ${score} ${seeders} | ${torrent.size || 'Unknown'} | ${seasonStr} ${epStr}`));
+  });
+  console.log('');
+
+  // Check if there's a clear best match (score > 150)
+  const bestMatch = matched[0];
+  if (bestMatch.matchScore >= 150 && matched.length > 1) {
+    const secondBest = matched[1];
+    if (bestMatch.matchScore - secondBest.matchScore >= 30) {
+      // Offer auto-select
+      console.log(success(`Best match: ${truncate(bestMatch.title, 50)}`));
+      const useAuto = await confirm('Use this torrent?', true);
+      if (useAuto) {
+        return bestMatch;
+      }
+    }
+  }
+
+  // Manual selection
+  const choices = matched.map((torrent, index) => ({
+    name: `${index + 1}. ${truncate(torrent.title, 45)} ${colors.success(`↑${torrent.seeders}`)} ${colors.primary(`[${torrent.matchScore}%]`)}`,
+    value: index
+  }));
+
+  choices.push(menuChoice('Show All Results', 'all', 'View unfiltered results'));
+  choices.push(backChoice('Cancel'));
+
+  const selection = await selectMenu('Select torrent:', choices, { pageSize: 15 });
+
+  if (selection === null) {
+    return null;
+  }
+
+  if (selection === 'all') {
+    return await showTorrentResults(results, source);
+  }
+
+  return matched[selection];
+}
+
+/**
+ * Show regular torrent results
+ */
+async function showTorrentResults(results, source) {
+  console.log('\n' + torrentResults(results));
+  console.log('');
+
+  const choices = results.slice(0, 20).map((result, index) => {
+    const trust = result.trusted ? colors.success(' [T]') : '';
+    const seeders = colors.success(`↑${result.seeders || 0}`);
+    return {
+      name: `${index + 1}. ${truncate(result.title, 45)} ${seeders}${trust}`,
+      value: index
+    };
+  });
+
+  choices.push(backChoice('Cancel'));
+
+  const selection = await selectMenu('Select torrent:', choices, { pageSize: 15 });
+
+  if (selection === null) {
+    return null;
+  }
+
+  return results[selection];
+}
+
+/**
  * Perform a text search
  * @returns {Promise<Object|null>} Selected result or null
  */
@@ -62,6 +235,11 @@ export async function performSearch() {
     return null;
   }
 
+  // Use smart search for anime
+  if (source.contentType === ContentType.ANIME) {
+    return await performAnimeSearch();
+  }
+
   const contentLabel = getContentLabel(source.contentType, { lowercase: true });
   const query = await textInput(`Search for ${contentLabel}:`);
 
@@ -72,14 +250,7 @@ export async function performSearch() {
   console.log(colors.muted(`\nSearching for "${query}"...`));
 
   try {
-    let results;
-
-    // Anime sources may have additional search options
-    if (source.contentType === ContentType.ANIME) {
-      results = await handler.search(query, source, {});
-    } else {
-      results = await handler.search(query, source);
-    }
+    const results = await handler.search(query, source);
 
     if (!results || results.length === 0) {
       console.log(warning('No results found. Try different search terms.'));
@@ -140,16 +311,23 @@ export async function performBrowse() {
     if (source.contentType === ContentType.ANIME) {
       // For anime, search with category filter
       results = await handler.search('', source, { category: selectedCategory });
+
+      if (!results || results.length === 0) {
+        console.log(warning('No results found in this category'));
+        return null;
+      }
+
+      return await showTorrentResults(results, source);
     } else {
       results = await handler.browse(selectedCategory, 1, source);
-    }
 
-    if (!results || results.length === 0) {
-      console.log(warning('No results found in this category'));
-      return null;
-    }
+      if (!results || results.length === 0) {
+        console.log(warning('No results found in this category'));
+        return null;
+      }
 
-    return await showSearchResults(results, source);
+      return await showSearchResults(results, source);
+    }
   } catch (err) {
     console.log(error(`Browse failed: ${err.message}`));
     return null;
@@ -188,38 +366,21 @@ export async function performUrlFetch() {
 }
 
 /**
- * Display search results and let user select
+ * Display search results and let user select (for novels/manga)
  * @param {Object[]} results - Search results
  * @param {Object} source - Active source
  * @returns {Promise<Object|null>} Selected result
  */
 async function showSearchResults(results, source) {
-  const isAnime = source.contentType === ContentType.ANIME;
-
-  // Display results
   console.log('');
-  if (isAnime) {
-    console.log(torrentResults(results));
-  } else {
-    console.log(searchResults(results));
-  }
+  console.log(searchResults(results));
   console.log('');
 
-  // Build selection choices
-  const choices = results.map((result, index) => {
-    let name = `${index + 1}. ${truncate(result.title, 50)}`;
+  const choices = results.map((result, index) => ({
+    name: `${index + 1}. ${truncate(result.title, 50)}`,
+    value: index
+  }));
 
-    if (isAnime) {
-      const trust = result.trusted ? colors.success(' [Trusted]') : '';
-      const seeders = colors.success(`↑${result.seeders || 0}`);
-      name = `${index + 1}. ${truncate(result.title, 45)} ${seeders}${trust}`;
-    }
-
-    return {
-      name,
-      value: index
-    };
-  });
   choices.push(backChoice('Cancel'));
 
   const selection = await selectMenu('Select one:', choices, { pageSize: 15 });

@@ -31,14 +31,18 @@ export async function pressEnter(message = 'Press Enter to continue...') {
  * @param {Object} options - Additional options
  */
 export async function textInput(message, options = {}) {
-  const { value } = await inquirer.prompt([{
+  const promptOptions = {
     type: 'input',
     name: 'value',
-    message,
-    default: options.default,
-    validate: options.validate,
-    filter: options.filter
-  }]);
+    message
+  };
+
+  // Only add optional properties if they are defined
+  if (options.default !== undefined) promptOptions.default = options.default;
+  if (options.validate) promptOptions.validate = options.validate;
+  if (options.filter) promptOptions.filter = options.filter;
+
+  const { value } = await inquirer.prompt([promptOptions]);
   return value;
 }
 
@@ -121,17 +125,23 @@ export async function select(message, choices, options = {}) {
  * @param {Object} options - Additional options
  */
 export async function multiSelect(message, choices, options = {}) {
-  const { values } = await inquirer.prompt([{
+  const promptOptions = {
     type: 'checkbox',
     name: 'values',
     message,
     choices,
-    ...promptConfig(options),
-    validate: options.required ? (input) => {
+    ...promptConfig(options)
+  };
+
+  // Only add validate if required is true
+  if (options.required) {
+    promptOptions.validate = (input) => {
       if (input.length === 0) return 'Please select at least one option';
       return true;
-    } : undefined
-  }]);
+    };
+  }
+
+  const { values } = await inquirer.prompt([promptOptions]);
   return values;
 }
 
@@ -237,7 +247,7 @@ export function parseRange(rangeStr, min = 1, max = Infinity) {
  * @param {Object} options - Validation options
  */
 export async function urlInput(message, options = {}) {
-  const { value } = await inquirer.prompt([{
+  const promptOptions = {
     type: 'input',
     name: 'value',
     message,
@@ -258,7 +268,11 @@ export async function urlInput(message, options = {}) {
         return 'Please enter a valid URL';
       }
     }
-  }]);
+  };
+
+  if (options.default !== undefined) promptOptions.default = options.default;
+
+  const { value } = await inquirer.prompt([promptOptions]);
   return value;
 }
 

@@ -71,12 +71,17 @@ export function buildMainMenuChoices(source) {
     ));
   }
 
-  // Sources section
-  choices.push(separator('Sources'));
+  // Navigation section
+  choices.push(separator('Navigation'));
   choices.push(menuChoice(
-    `${icons.source} Manage Sources`,
+    `${icons.back} Switch Content Type`,
+    'switch-type',
+    'Change to novels, manga, or anime'
+  ));
+  choices.push(menuChoice(
+    `${icons.source} Change Source`,
     'sources',
-    'Switch or configure sources'
+    `Switch ${contentLabel.toLowerCase()} source`
   ));
 
   // System section

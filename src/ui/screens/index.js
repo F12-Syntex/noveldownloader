@@ -4,6 +4,11 @@
  */
 
 export { showMainMenu } from './main-menu.js';
+export {
+  showContentTypeSelection,
+  selectSourceForType,
+  contentTypeFlow
+} from './content-type-select.js';
 export { showSourceSelect, showSourceManagement } from './source-select.js';
 export {
   showDownloadMethod,

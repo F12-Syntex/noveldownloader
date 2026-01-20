@@ -13,21 +13,62 @@ import * as ui from './ui.js';
 // Default download directory
 const DEFAULT_DOWNLOAD_DIR = 'downloads/anime';
 
+// Additional trackers to improve connectivity
+const TRACKERS = [
+    'udp://tracker.opentrackr.org:1337/announce',
+    'udp://open.stealth.si:80/announce',
+    'udp://tracker.torrent.eu.org:451/announce',
+    'udp://tracker.openbittorrent.com:6969/announce',
+    'udp://open.demonii.com:1337/announce',
+    'udp://tracker.moeking.me:6969/announce',
+    'udp://exodus.desync.com:6969/announce',
+    'udp://tracker.tiny-vps.com:6969/announce',
+    'udp://tracker.pomf.se:80/announce',
+    'udp://explodie.org:6969/announce',
+    'http://nyaa.tracker.wf:7777/announce',
+    'http://anidex.moe:6969/announce',
+    'http://tracker.anirena.com:80/announce'
+];
+
 // Singleton client instance
 let client = null;
 
 /**
- * Get or create WebTorrent client
+ * Get or create WebTorrent client with optimized settings
  */
 function getClient() {
     if (!client) {
-        client = new WebTorrent();
+        client = new WebTorrent({
+            maxConns: 100,        // Max connections per torrent
+            tracker: true,        // Enable trackers
+            dht: true,           // Enable DHT
+            lsd: true,           // Enable Local Service Discovery
+            webSeeds: true       // Enable WebSeeds
+        });
 
         client.on('error', (err) => {
             log.error('WebTorrent client error', { error: err.message });
         });
+
+        log.debug('WebTorrent client created with optimized settings');
     }
     return client;
+}
+
+/**
+ * Add trackers to a magnet link if not present
+ */
+function enhanceMagnet(magnetLink) {
+    if (!magnetLink.startsWith('magnet:')) return magnetLink;
+
+    // Add trackers to the magnet link
+    let enhanced = magnetLink;
+    for (const tracker of TRACKERS) {
+        if (!enhanced.includes(encodeURIComponent(tracker))) {
+            enhanced += `&tr=${encodeURIComponent(tracker)}`;
+        }
+    }
+    return enhanced;
 }
 
 /**
@@ -49,12 +90,16 @@ export async function getTorrentFiles(magnetOrTorrent, timeout = 30000) {
             reject(new Error('Timeout while fetching torrent metadata'));
         }, timeout);
 
+        // Enhance magnet link with additional trackers
+        const enhancedMagnet = enhanceMagnet(magnetOrTorrent);
+
         const opts = {
             path: DEFAULT_DOWNLOAD_DIR,
             destroyStoreOnDestroy: true,
+            announce: TRACKERS, // Add trackers to the torrent
         };
 
-        client.add(magnetOrTorrent, opts, (torrent) => {
+        client.add(enhancedMagnet, opts, (torrent) => {
             clearTimeout(timeoutId);
 
             // Deselect all files initially (don't download)
@@ -196,14 +241,18 @@ export async function downloadTorrent(magnetOrTorrent, options = {}) {
 
     await ensureDownloadDir(downloadDir);
 
+    // Enhance magnet link with additional trackers
+    const enhancedMagnet = enhanceMagnet(magnetOrTorrent);
+
     return new Promise((resolve, reject) => {
         const client = getClient();
 
         const opts = {
             path: downloadDir,
+            announce: TRACKERS, // Add trackers to the torrent
         };
 
-        client.add(magnetOrTorrent, opts, (torrent) => {
+        client.add(enhancedMagnet, opts, (torrent) => {
             log.info(`Started downloading: ${torrent.name}`);
 
             let lastProgress = 0;

@@ -16,6 +16,9 @@ import { ContentType } from './core/content/types.js';
 // UI Screens
 import {
   showMainMenu,
+  showContentTypeSelection,
+  selectSourceForType,
+  contentTypeFlow,
   showSourceManagement,
   searchFlow,
   showContentDetails,
@@ -105,11 +108,13 @@ class App {
     await this.initialize();
     this.running = true;
 
-    // Check for active source, prompt to select if none
-    const activeSource = getActiveSource();
-    if (!activeSource) {
-      console.log(warning('\nNo source selected.'));
-      await this.handleSourceSelection();
+    // First, let user select content type
+    const result = await this.showContentTypeSelection();
+    if (!result) {
+      // User chose to exit
+      this.running = false;
+      await this.shutdown();
+      return;
     }
 
     // Main application loop
@@ -146,6 +151,10 @@ class App {
 
       case 'export':
         await this.handleExport();
+        break;
+
+      case 'switch-type':
+        await this.handleSwitchContentType();
         break;
 
       case 'sources':
@@ -366,6 +375,28 @@ class App {
     const deps = await checkAllDependencies();
     displayDependencyStatus(deps);
     await pressEnter();
+  }
+
+  /**
+   * Show content type selection and set up source
+   * @returns {Promise<Object|null>} Selected content type and source, or null
+   */
+  async showContentTypeSelection() {
+    const result = await contentTypeFlow();
+    return result;
+  }
+
+  /**
+   * Handle switching content type from main menu
+   */
+  async handleSwitchContentType() {
+    const result = await contentTypeFlow();
+    if (!result) {
+      // User cancelled, stay in current context
+      return;
+    }
+    // Content type and source have been updated by contentTypeFlow
+    console.log(success(`Switched to ${result.source.name}`));
   }
 
   /**
