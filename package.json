@@ -1,0 +1,22 @@
+{
+  "name": "noveldownloader",
+  "version": "1.0.0",
+  "description": "An interactive CLI program that lets users download novels into formats such as EPUB or PDF from NovelFull.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "noveldownloader": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "cheerio": "^1.1.2",
+    "inquirer": "^9.2.15",
+    "winston": "^3.11.0"
+  }
+}

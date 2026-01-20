@@ -1,0 +1,489 @@
+#!/usr/bin/env node
+
+/**
+ * Novel Downloader CLI
+ * An interactive CLI for downloading novels from NovelFull.net
+ */
+
+import inquirer from 'inquirer';
+import chalk from 'chalk';
+import { searchNovels, getNovelDetails } from './scraper.js';
+import { downloadNovel, retryFailedChapters, getDownloadProgress } from './downloader.js';
+import { exportToEpub, exportToPdf, listExports } from './exporter.js';
+import * as storage from './storage.js';
+import { log, setDetailedLogs } from './logger.js';
+import { loadSettings, setSetting, getSettings } from './settings.js';
+
+// ASCII Art Banner
+const BANNER = `
+${chalk.cyan('╔════════════════════════════════════════════════════════════╗')}
+${chalk.cyan('║')}  ${chalk.bold.white('NOVEL DOWNLOADER')}                                        ${chalk.cyan('║')}
+${chalk.cyan('║')}  ${chalk.gray('Download & Export novels from NovelFull.net')}               ${chalk.cyan('║')}
+${chalk.cyan('╚════════════════════════════════════════════════════════════╝')}
+`;
+
+/**
+ * Main menu options
+ */
+async function mainMenu() {
+    console.clear();
+    console.log(BANNER);
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'What would you like to do?',
+            choices: [
+                { name: 'Download New Novel', value: 'download' },
+                { name: 'View Downloads', value: 'downloads' },
+                { name: 'Export Novel', value: 'export' },
+                new inquirer.Separator(),
+                { name: 'Settings', value: 'settings' },
+                { name: 'Exit', value: 'exit' }
+            ]
+        }
+    ]);
+
+    return action;
+}
+
+/**
+ * Download new novel flow
+ */
+async function downloadNewNovel() {
+    console.clear();
+    console.log(chalk.cyan('━━━ Download New Novel ━━━\n'));
+
+    // Get search query
+    const { query } = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'query',
+            message: 'Enter novel name to search:',
+            validate: (input) => input.trim().length > 0 || 'Please enter a search term'
+        }
+    ]);
+
+    console.log(chalk.gray('\nSearching...'));
+
+    try {
+        const results = await searchNovels(query.trim());
+
+        if (results.length === 0) {
+            console.log(chalk.yellow('\nNo novels found. Try a different search term.'));
+            await pressEnterToContinue();
+            return;
+        }
+
+        // Let user select a novel
+        const { selectedNovel } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'selectedNovel',
+                message: `Found ${results.length} novels. Select one to download:`,
+                choices: [
+                    ...results.map((novel, idx) => ({
+                        name: `${novel.title} ${chalk.gray(`by ${novel.author}`)}`,
+                        value: novel
+                    })),
+                    new inquirer.Separator(),
+                    { name: chalk.gray('← Cancel'), value: null }
+                ],
+                pageSize: 15
+            }
+        ]);
+
+        if (!selectedNovel) return;
+
+        console.log(chalk.gray('\nFetching novel details...'));
+
+        // Get full novel details
+        const novelDetails = await getNovelDetails(selectedNovel.url);
+
+        // Display novel info
+        console.log(chalk.cyan('\n━━━ Novel Details ━━━'));
+        console.log(chalk.white(`Title:    ${novelDetails.title}`));
+        console.log(chalk.white(`Author:   ${novelDetails.author}`));
+        console.log(chalk.white(`Status:   ${novelDetails.status}`));
+        console.log(chalk.white(`Chapters: ${novelDetails.totalChapters}`));
+        console.log(chalk.white(`Genres:   ${novelDetails.genres.join(', ')}`));
+        if (novelDetails.rating) {
+            console.log(chalk.white(`Rating:   ${novelDetails.rating}`));
+        }
+        if (novelDetails.description) {
+            console.log(chalk.gray(`\n${novelDetails.description.substring(0, 300)}...`));
+        }
+
+        // Confirm download
+        const { confirm } = await inquirer.prompt([
+            {
+                type: 'confirm',
+                name: 'confirm',
+                message: `Download ${novelDetails.totalChapters} chapters?`,
+                default: true
+            }
+        ]);
+
+        if (!confirm) return;
+
+        // Start download
+        const result = await downloadNovel(novelDetails);
+
+        // Display results
+        console.log(chalk.cyan('\n━━━ Download Complete ━━━'));
+        console.log(chalk.green(`✓ Downloaded: ${result.downloaded} chapters`));
+        if (result.skipped > 0) {
+            console.log(chalk.gray(`○ Skipped:    ${result.skipped} (already downloaded)`));
+        }
+        if (result.failed > 0) {
+            console.log(chalk.red(`✗ Failed:     ${result.failed} chapters`));
+
+            const { retry } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'retry',
+                    message: 'Would you like to retry failed chapters?',
+                    default: true
+                }
+            ]);
+
+            if (retry) {
+                await retryFailedChapters(novelDetails.title);
+            }
+        }
+
+    } catch (error) {
+        console.log(chalk.red(`\nError: ${error.message}`));
+        log.error('Download failed', { error: error.message });
+    }
+
+    await pressEnterToContinue();
+}
+
+/**
+ * View downloads
+ */
+async function viewDownloads() {
+    console.clear();
+    console.log(chalk.cyan('━━━ Your Downloads ━━━\n'));
+
+    const downloads = await storage.getAllDownloads();
+
+    if (downloads.length === 0) {
+        console.log(chalk.gray('No novels downloaded yet.'));
+        await pressEnterToContinue();
+        return;
+    }
+
+    // Get progress for each novel
+    const novelList = [];
+    for (const novel of downloads) {
+        const progress = await getDownloadProgress(novel.title);
+        novelList.push({
+            ...novel,
+            progress
+        });
+    }
+
+    // Display novels with progress
+    for (const novel of novelList) {
+        const prog = novel.progress;
+        const progressBar = createProgressBar(prog?.percentage || 0, 20);
+        const status = prog?.isComplete
+            ? chalk.green('✓ Complete')
+            : chalk.yellow(`${prog?.downloadedCount || 0}/${prog?.totalChapters || '?'}`);
+
+        console.log(chalk.white.bold(novel.title));
+        console.log(chalk.gray(`  Author: ${novel.author || 'Unknown'}`));
+        console.log(chalk.gray(`  Status: ${novel.status || 'Unknown'}`));
+        console.log(`  Progress: ${progressBar} ${status}`);
+
+        if (prog?.failedChapters?.length > 0) {
+            console.log(chalk.red(`  Failed: ${prog.failedChapters.length} chapters`));
+        }
+        console.log();
+    }
+
+    // Options menu
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'What would you like to do?',
+            choices: [
+                { name: 'Resume incomplete download', value: 'resume' },
+                { name: 'Retry failed chapters', value: 'retry' },
+                { name: 'Delete a novel', value: 'delete' },
+                new inquirer.Separator(),
+                { name: chalk.gray('← Back to menu'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return;
+
+    // Select a novel for the action
+    const { selectedNovel } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedNovel',
+            message: 'Select a novel:',
+            choices: [
+                ...novelList.map(n => ({
+                    name: n.title,
+                    value: n
+                })),
+                new inquirer.Separator(),
+                { name: chalk.gray('← Cancel'), value: null }
+            ]
+        }
+    ]);
+
+    if (!selectedNovel) return;
+
+    if (action === 'resume') {
+        console.log(chalk.gray('\nResuming download...'));
+
+        // Re-fetch novel details to get chapter list
+        try {
+            const novelDetails = await getNovelDetails(selectedNovel.url);
+            await downloadNovel(novelDetails, { skipExisting: true });
+        } catch (err) {
+            console.log(chalk.red(`Error: ${err.message}`));
+        }
+
+    } else if (action === 'retry') {
+        await retryFailedChapters(selectedNovel.title);
+
+    } else if (action === 'delete') {
+        const { confirm } = await inquirer.prompt([
+            {
+                type: 'confirm',
+                name: 'confirm',
+                message: `Delete "${selectedNovel.title}" and all downloaded chapters?`,
+                default: false
+            }
+        ]);
+
+        if (confirm) {
+            await storage.deleteNovel(selectedNovel.title);
+            console.log(chalk.green('\nNovel deleted.'));
+        }
+    }
+
+    await pressEnterToContinue();
+}
+
+/**
+ * Export novel flow
+ */
+async function exportNovel() {
+    console.clear();
+    console.log(chalk.cyan('━━━ Export Novel ━━━\n'));
+
+    const downloads = await storage.getAllDownloads();
+
+    if (downloads.length === 0) {
+        console.log(chalk.gray('No novels downloaded yet. Download a novel first.'));
+        await pressEnterToContinue();
+        return;
+    }
+
+    // Show existing exports
+    const existingExports = await listExports();
+    if (existingExports.length > 0) {
+        console.log(chalk.gray('Existing exports:'));
+        existingExports.forEach(exp => {
+            console.log(chalk.gray(`  • ${exp.filename} (${exp.format}, ${exp.size})`));
+        });
+        console.log();
+    }
+
+    // Select a novel to export
+    const { selectedNovel } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedNovel',
+            message: 'Select a novel to export:',
+            choices: [
+                ...downloads.map(n => {
+                    const chapterCount = n.totalChapters || n.chapters?.length || '?';
+                    return {
+                        name: `${n.title} ${chalk.gray(`(${chapterCount} chapters)`)}`,
+                        value: n
+                    };
+                }),
+                new inquirer.Separator(),
+                { name: chalk.gray('← Cancel'), value: null }
+            ]
+        }
+    ]);
+
+    if (!selectedNovel) return;
+
+    // Check if there are downloaded chapters
+    const downloadedChapters = await storage.getDownloadedChapters(selectedNovel.title);
+    if (downloadedChapters.length === 0) {
+        console.log(chalk.yellow('\nNo chapters downloaded for this novel yet.'));
+        await pressEnterToContinue();
+        return;
+    }
+
+    // Select export format
+    const { format } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'format',
+            message: 'Select export format:',
+            choices: [
+                { name: '📖  EPUB (e-readers, most devices)', value: 'epub' },
+                { name: '📄  PDF (print, desktop reading)', value: 'pdf' },
+                new inquirer.Separator(),
+                { name: chalk.gray('← Cancel'), value: null }
+            ]
+        }
+    ]);
+
+    if (!format) return;
+
+    console.log(chalk.gray(`\nExporting ${downloadedChapters.length} chapters...`));
+
+    try {
+        if (format === 'epub') {
+            await exportToEpub(selectedNovel.title);
+        } else {
+            await exportToPdf(selectedNovel.title);
+        }
+    } catch (error) {
+        console.log(chalk.red(`\nExport failed: ${error.message}`));
+        log.error('Export failed', { error: error.message, format });
+    }
+
+    await pressEnterToContinue();
+}
+
+/**
+ * Settings menu
+ */
+async function showSettings() {
+    console.clear();
+    console.log(chalk.cyan('━━━ Settings ━━━\n'));
+
+    const settings = getSettings();
+
+    const { setting } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'setting',
+            message: 'Configure settings:',
+            choices: [
+                {
+                    name: `Detailed Logs: ${settings.detailedLogs ? chalk.green('ON') : chalk.gray('OFF')}`,
+                    value: 'detailedLogs'
+                },
+                new inquirer.Separator(),
+                { name: chalk.gray('← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (setting === 'back') return;
+
+    if (setting === 'detailedLogs') {
+        const newValue = !settings.detailedLogs;
+        await setSetting('detailedLogs', newValue);
+        setDetailedLogs(newValue);
+        console.log(chalk.green(`\nDetailed logs ${newValue ? 'enabled' : 'disabled'}.`));
+        await pressEnterToContinue();
+    }
+}
+
+/**
+ * Create a simple ASCII progress bar
+ */
+function createProgressBar(percentage, width = 20) {
+    const filled = Math.round((percentage / 100) * width);
+    const empty = width - filled;
+    const bar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
+    return `[${bar}] ${percentage}%`;
+}
+
+/**
+ * Wait for user to press enter
+ */
+async function pressEnterToContinue() {
+    const readline = await import('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    return new Promise(resolve => {
+        rl.question(chalk.gray('\nPress Enter to continue...'), () => {
+            rl.close();
+            resolve();
+        });
+    });
+}
+
+/**
+ * Main application loop
+ */
+async function main() {
+    log.info('Application started');
+
+    // Load settings and apply them
+    const settings = await loadSettings();
+    setDetailedLogs(settings.detailedLogs);
+
+    // Ensure data directory exists
+    await storage.ensureDataDir();
+
+    let running = true;
+
+    while (running) {
+        try {
+            const action = await mainMenu();
+
+            switch (action) {
+                case 'download':
+                    await downloadNewNovel();
+                    break;
+                case 'downloads':
+                    await viewDownloads();
+                    break;
+                case 'export':
+                    await exportNovel();
+                    break;
+                case 'settings':
+                    await showSettings();
+                    break;
+                case 'exit':
+                    running = false;
+                    break;
+            }
+        } catch (error) {
+            if (error.name === 'ExitPromptError') {
+                // User pressed Ctrl+C
+                running = false;
+            } else {
+                console.log(chalk.red(`\nUnexpected error: ${error.message}`));
+                log.error('Unexpected error', { error: error.message, stack: error.stack });
+                await pressEnterToContinue();
+            }
+        }
+    }
+
+    console.log(chalk.cyan('\nGoodbye! Happy reading!\n'));
+    log.info('Application exited');
+    process.exit(0);
+}
+
+// Handle Ctrl+C gracefully
+process.on('SIGINT', () => {
+    console.log(chalk.cyan('\n\nGoodbye! Happy reading!\n'));
+    process.exit(0);
+});
+
+// Run the application
+main().catch(error => {
+    console.error(chalk.red('Fatal error:'), error);
+    process.exit(1);
+});
