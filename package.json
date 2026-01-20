@@ -1,6 +1,6 @@
 {
   "name": "noveldownloader",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "An interactive CLI program that lets users download novels into formats such as EPUB or PDF from NovelFull.",
   "type": "module",
   "main": "src/index.js",

@@ -71,11 +71,3 @@ export {
   settingsPanel
 } from './status.js';
 
-// Default export with all components organized by category
-export default {
-  banner: await import('./banner.js'),
-  progress: await import('./progress.js'),
-  menu: await import('./menu.js'),
-  prompt: await import('./prompt.js'),
-  status: await import('./status.js')
-};

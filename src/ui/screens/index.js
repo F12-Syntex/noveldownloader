@@ -42,12 +42,3 @@ export {
 } from './export.js';
 export { showSettings } from './settings.js';
 
-export default {
-  mainMenu: await import('./main-menu.js'),
-  sourceSelect: await import('./source-select.js'),
-  search: await import('./search.js'),
-  download: await import('./download.js'),
-  downloadsList: await import('./downloads-list.js'),
-  export: await import('./export.js'),
-  settings: await import('./settings.js')
-};
