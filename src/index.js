@@ -26,6 +26,8 @@ import {
     setSourceEnabled
 } from './sourceManager.js';
 import * as ui from './ui.js';
+import * as nyaa from './nyaa.js';
+import * as torrent from './torrent.js';
 
 /**
  * Main menu
@@ -41,6 +43,8 @@ async function mainMenu() {
         ui.menuChoice(`Download New ${contentLabel}`, 'download', `Find and download ${ui.getContentLabel()}`),
         ui.menuChoice('View Downloads', 'downloads', 'Manage downloaded content'),
         ui.menuChoice(`Export ${contentLabel}`, 'export', 'Convert to EPUB, PDF, etc.'),
+        new inquirer.Separator(ui.theme.muted('─'.repeat(40))),
+        ui.menuChoice('🎬 Anime (Torrent)', 'anime', 'Download anime via nyaa.si'),
         new inquirer.Separator(ui.theme.muted('─'.repeat(40))),
         ui.menuChoice('Sources', 'sources', activeSource ? activeSource.name : 'Configure'),
         ui.menuChoice('Dependencies', 'dependencies', 'Check required tools'),
@@ -770,6 +774,231 @@ async function showSourceDetails(source) {
 }
 
 /**
+ * Anime download flow
+ */
+async function animeDownload() {
+    console.clear();
+    console.log(ui.sectionHeader('🎬 Anime Download'));
+    console.log();
+
+    const settings = getSettings();
+    console.log(ui.keyValue('Min Seeders', settings.minSeeders));
+    console.log(ui.keyValue('Download Path', settings.animeDownloadPath));
+    console.log();
+
+    // Get search query
+    const { query } = await inquirer.prompt([{
+        type: 'input',
+        name: 'query',
+        message: 'Search anime on nyaa.si:',
+        validate: input => input.trim().length > 0 || 'Please enter a search term'
+    }]);
+
+    // Ask for episode filter (optional)
+    const { episodeRange } = await inquirer.prompt([{
+        type: 'input',
+        name: 'episodeRange',
+        message: 'Episode filter (e.g., 1, 1-5, 1,3,5) or leave empty for all:',
+    }]);
+
+    const targetEpisodes = nyaa.parseEpisodeRange(episodeRange);
+
+    console.log();
+    console.log(ui.loadingText('Searching nyaa.si...'));
+
+    try {
+        // Search nyaa
+        let results = await nyaa.searchNyaa(query.trim(), {
+            filter: settings.trustedOnly ? nyaa.FILTERS.TRUSTED_ONLY : nyaa.FILTERS.NO_FILTER,
+        });
+
+        if (results.length === 0) {
+            console.log(ui.warning('No results found.'));
+            await ui.pressEnter();
+            return;
+        }
+
+        // Filter by min seeders
+        results = nyaa.filterByMinSeeders(results, settings.minSeeders);
+
+        if (results.length === 0) {
+            console.log(ui.warning(`No results with at least ${settings.minSeeders} seeders.`));
+            await ui.pressEnter();
+            return;
+        }
+
+        // Filter by episode if specified
+        if (targetEpisodes.length > 0) {
+            const filtered = nyaa.filterByEpisode(results, targetEpisodes);
+            if (filtered.length > 0) {
+                results = filtered;
+            }
+            console.log(ui.info(`Filtering for episodes: ${targetEpisodes.join(', ')}`));
+        }
+
+        console.log();
+        console.log(ui.success(`Found ${results.length} torrents`));
+
+        // Display results and let user select
+        const { selectedTorrent } = await inquirer.prompt([{
+            type: 'list',
+            name: 'selectedTorrent',
+            message: 'Select a torrent:',
+            choices: [
+                ...results.slice(0, 20).map(r => {
+                    const trust = r.trustLevel === 'trusted' ? ui.theme.success('★') :
+                                  r.trustLevel === 'remake' ? ui.theme.error('✗') : ' ';
+                    const eps = r.episodes.length > 0 ?
+                        (r.isBatch ? `[${r.episodes[0]}-${r.episodes[r.episodes.length-1]}]` : `[Ep ${r.episodes.join(',')}]`) :
+                        '';
+                    return {
+                        name: `${trust} ${ui.truncate(r.title, 50)} ${ui.theme.muted(`| ${r.size} | S:${r.seeders} L:${r.leechers}`)} ${ui.theme.primary(eps)}`,
+                        value: r
+                    };
+                }),
+                new inquirer.Separator(),
+                ui.backChoice('Cancel')
+            ],
+            ...ui.promptConfig({ pageSize: 15 })
+        }]);
+
+        if (!selectedTorrent) return;
+
+        // Show torrent details
+        console.log();
+        console.log(ui.sectionHeader('Torrent Details'));
+        console.log();
+        console.log(ui.keyValue('Title', selectedTorrent.title));
+        console.log(ui.keyValue('Size', selectedTorrent.size));
+        console.log(ui.keyValue('Seeders', selectedTorrent.seeders));
+        console.log(ui.keyValue('Leechers', selectedTorrent.leechers));
+        console.log(ui.keyValue('Date', selectedTorrent.date));
+        console.log();
+
+        // Get file list from torrent
+        console.log(ui.loadingText('Fetching torrent metadata...'));
+
+        let torrentInfo;
+        try {
+            torrentInfo = await torrent.getTorrentFiles(selectedTorrent.magnetLink);
+        } catch (err) {
+            console.log(ui.error(`Failed to get torrent info: ${err.message}`));
+            await ui.pressEnter();
+            return;
+        }
+
+        const videoFiles = torrentInfo.files.filter(f => f.isVideo);
+
+        console.log();
+        console.log(ui.success(`Found ${torrentInfo.files.length} files (${videoFiles.length} videos)`));
+        console.log();
+
+        // If multiple video files, let user select which to download
+        let filesToDownload = [];
+
+        if (videoFiles.length === 0) {
+            console.log(ui.warning('No video files found in torrent.'));
+            const { downloadAll } = await inquirer.prompt([{
+                type: 'confirm',
+                name: 'downloadAll',
+                message: 'Download all files anyway?',
+                default: false
+            }]);
+
+            if (downloadAll) {
+                filesToDownload = torrentInfo.files.map(f => f.index);
+            } else {
+                torrent.removeTorrent(torrentInfo.infoHash);
+                return;
+            }
+        } else if (videoFiles.length === 1) {
+            // Single video file - ask to confirm
+            console.log(ui.keyValue('File', videoFiles[0].name));
+            console.log(ui.keyValue('Size', videoFiles[0].sizeFormatted));
+
+            const { confirm } = await inquirer.prompt([{
+                type: 'confirm',
+                name: 'confirm',
+                message: 'Download this file?',
+                default: true
+            }]);
+
+            if (confirm) {
+                filesToDownload = [videoFiles[0].index];
+            } else {
+                torrent.removeTorrent(torrentInfo.infoHash);
+                return;
+            }
+        } else {
+            // Multiple video files - let user select
+            const { selectedFiles } = await inquirer.prompt([{
+                type: 'checkbox',
+                name: 'selectedFiles',
+                message: 'Select files to download:',
+                choices: videoFiles.map(f => ({
+                    name: `${f.name} ${ui.theme.muted(`(${f.sizeFormatted})`)}`,
+                    value: f.index,
+                    checked: false
+                })),
+                validate: input => input.length > 0 || 'Select at least one file'
+            }]);
+
+            filesToDownload = selectedFiles;
+        }
+
+        if (filesToDownload.length === 0) {
+            torrent.removeTorrent(torrentInfo.infoHash);
+            return;
+        }
+
+        // Start download
+        console.log();
+        console.log(ui.sectionHeader('Downloading'));
+        console.log();
+
+        const selectedFilesInfo = torrentInfo.files.filter(f => filesToDownload.includes(f.index));
+        const totalSize = selectedFilesInfo.reduce((sum, f) => sum + f.size, 0);
+        console.log(ui.keyValue('Files', `${selectedFilesInfo.length}`));
+        console.log(ui.keyValue('Total Size', nyaa.formatSize(totalSize)));
+        console.log();
+
+        let lastLine = '';
+        const result = await torrent.downloadFiles(torrentInfo, filesToDownload, {
+            downloadDir: settings.animeDownloadPath,
+            onProgress: (progress) => {
+                const line = torrent.formatDownloadProgress(progress);
+                if (process.stdout.isTTY && process.stdout.clearLine) {
+                    process.stdout.clearLine(0);
+                    process.stdout.cursorTo(0);
+                    process.stdout.write(line);
+                } else if (line !== lastLine) {
+                    console.log(line);
+                    lastLine = line;
+                }
+            }
+        });
+
+        console.log();
+        console.log();
+        console.log(ui.success('Download complete!'));
+        console.log();
+
+        for (const file of result.files) {
+            console.log(ui.listItem(file.name));
+        }
+
+        // Clean up torrent from client
+        torrent.removeTorrent(torrentInfo.infoHash);
+
+    } catch (err) {
+        console.log(ui.error(err.message));
+        log.error('Anime download failed', { error: err.message });
+    }
+
+    await ui.pressEnter();
+}
+
+/**
  * Settings menu
  */
 async function showSettings() {
@@ -784,21 +1013,63 @@ async function showSettings() {
         name: 'setting',
         message: 'Configure:',
         choices: [
+            new inquirer.Separator(ui.theme.muted('── General ──')),
             {
                 name: `Detailed Logs: ${settings.detailedLogs ? ui.theme.success('ON') : ui.theme.muted('OFF')}`,
                 value: 'detailedLogs'
             },
+            new inquirer.Separator(ui.theme.muted('── Anime/Torrent ──')),
+            {
+                name: `Min Seeders: ${ui.theme.highlight(settings.minSeeders)}`,
+                value: 'minSeeders'
+            },
+            {
+                name: `Download Path: ${ui.theme.highlight(settings.animeDownloadPath)}`,
+                value: 'animeDownloadPath'
+            },
+            {
+                name: `Trusted Only: ${settings.trustedOnly ? ui.theme.success('ON') : ui.theme.muted('OFF')}`,
+                value: 'trustedOnly'
+            },
             new inquirer.Separator(),
             ui.backChoice('Back')
         ],
-        ...ui.promptConfig()
+        ...ui.promptConfig({ pageSize: 12 })
     }]);
+
+    if (!setting) return;
 
     if (setting === 'detailedLogs') {
         const newValue = !settings.detailedLogs;
         await setSetting('detailedLogs', newValue);
         setDetailedLogs(newValue);
         console.log(ui.success(`Detailed logs ${newValue ? 'enabled' : 'disabled'}`));
+        await ui.pressEnter();
+    } else if (setting === 'minSeeders') {
+        const { value } = await inquirer.prompt([{
+            type: 'number',
+            name: 'value',
+            message: 'Minimum seeders required:',
+            default: settings.minSeeders,
+            validate: input => input >= 0 || 'Must be 0 or greater'
+        }]);
+        await setSetting('minSeeders', value);
+        console.log(ui.success(`Min seeders set to ${value}`));
+        await ui.pressEnter();
+    } else if (setting === 'animeDownloadPath') {
+        const { value } = await inquirer.prompt([{
+            type: 'input',
+            name: 'value',
+            message: 'Download path:',
+            default: settings.animeDownloadPath
+        }]);
+        await setSetting('animeDownloadPath', value);
+        console.log(ui.success(`Download path set to ${value}`));
+        await ui.pressEnter();
+    } else if (setting === 'trustedOnly') {
+        const newValue = !settings.trustedOnly;
+        await setSetting('trustedOnly', newValue);
+        console.log(ui.success(`Trusted only ${newValue ? 'enabled' : 'disabled'}`));
         await ui.pressEnter();
     }
 }
@@ -842,6 +1113,9 @@ async function main() {
                     break;
                 case 'export':
                     await exportContent();
+                    break;
+                case 'anime':
+                    await animeDownload();
                     break;
                 case 'sources':
                     await manageSources();

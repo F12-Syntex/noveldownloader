@@ -11,6 +11,11 @@ const SETTINGS_FILE = 'settings.json';
 const DEFAULT_SETTINGS = {
     detailedLogs: false,
     delayBetweenChapters: 400,
+    // Anime/Torrent settings
+    animeDownloadPath: 'downloads/anime',
+    minSeeders: 1,
+    preferredQuality: '1080p', // 480p, 720p, 1080p, 4K
+    trustedOnly: false,
 };
 
 let currentSettings = { ...DEFAULT_SETTINGS };
