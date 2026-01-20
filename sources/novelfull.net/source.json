@@ -4,6 +4,20 @@
     "baseUrl": "https://novelfull.net",
     "enabled": true,
     "version": "1.0.0",
+    "contentType": "novel",
+
+    "capabilities": [
+        "search:text",
+        "search:url",
+        "content:text",
+        "download:sequential",
+        "export:epub",
+        "export:pdf",
+        "export:docx",
+        "export:txt",
+        "export:html"
+    ],
+
     "http": {
         "timeout": 15000,
         "retryAttempts": 3,

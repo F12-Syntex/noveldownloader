@@ -1,0 +1,159 @@
+{
+    "name": "Nyaa.si",
+    "id": "nyaa.si",
+    "baseUrl": "https://nyaa.si",
+    "enabled": true,
+    "version": "1.0.0",
+    "contentType": "anime",
+
+    "capabilities": [
+        "search:text",
+        "search:browse",
+        "content:torrent",
+        "download:torrent"
+    ],
+
+    "http": {
+        "timeout": 15000,
+        "retryAttempts": 3,
+        "retryDelay": 1000,
+        "rateLimit": 500,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    },
+
+    "search": {
+        "url": "{baseUrl}/?f={filter}&c={category}&q={query}&s={sortBy}&o={sortOrder}",
+        "resultSelector": "table.torrent-list tbody tr",
+        "defaults": {
+            "filter": "0",
+            "category": "1_0",
+            "sortBy": "seeders",
+            "sortOrder": "desc"
+        },
+        "fields": {
+            "category": {
+                "selector": "td:nth-child(1) a",
+                "attribute": "href",
+                "transform": "extractCategory"
+            },
+            "title": {
+                "selector": "td:nth-child(2) a:not(.comments):last-child",
+                "attribute": "text"
+            },
+            "detailUrl": {
+                "selector": "td:nth-child(2) a:not(.comments):last-child",
+                "attribute": "href"
+            },
+            "torrentUrl": {
+                "selector": "td:nth-child(3) a[href$='.torrent']",
+                "attribute": "href"
+            },
+            "magnetLink": {
+                "selector": "td:nth-child(3) a[href^='magnet:']",
+                "attribute": "href"
+            },
+            "size": {
+                "selector": "td:nth-child(4)",
+                "attribute": "text"
+            },
+            "date": {
+                "selector": "td:nth-child(5)",
+                "attribute": "text"
+            },
+            "seeders": {
+                "selector": "td:nth-child(6)",
+                "attribute": "text",
+                "transform": "parseInt"
+            },
+            "leechers": {
+                "selector": "td:nth-child(7)",
+                "attribute": "text",
+                "transform": "parseInt"
+            },
+            "downloads": {
+                "selector": "td:nth-child(8)",
+                "attribute": "text",
+                "transform": "parseInt"
+            }
+        },
+        "trustLevel": {
+            "trusted": "success",
+            "remake": "danger"
+        }
+    },
+
+    "browse": {
+        "enabled": true,
+        "categories": [
+            { "name": "All Anime", "value": "1_0" },
+            { "name": "Anime - Music Video", "value": "1_1" },
+            { "name": "Anime - English Translated", "value": "1_2" },
+            { "name": "Anime - Non-English Translated", "value": "1_3" },
+            { "name": "Anime - Raw", "value": "1_4" }
+        ],
+        "filters": [
+            { "name": "No Filter", "value": "0" },
+            { "name": "No Remakes", "value": "1" },
+            { "name": "Trusted Only", "value": "2" }
+        ],
+        "sortOptions": [
+            { "name": "Most Seeders", "value": "seeders", "order": "desc" },
+            { "name": "Most Recent", "value": "id", "order": "desc" },
+            { "name": "Largest Size", "value": "size", "order": "desc" },
+            { "name": "Most Downloads", "value": "downloads", "order": "desc" }
+        ]
+    },
+
+    "torrentDetails": {
+        "url": "{baseUrl}/view/{id}",
+        "fields": {
+            "title": {
+                "selector": "h3.panel-title",
+                "attribute": "text"
+            },
+            "magnetLink": {
+                "selector": "a[href^='magnet:']",
+                "attribute": "href"
+            },
+            "torrentUrl": {
+                "selector": "a[href$='.torrent']",
+                "attribute": "href"
+            },
+            "description": {
+                "selector": "#torrent-description",
+                "attribute": "text"
+            }
+        },
+        "fileListSelector": ".torrent-file-list li",
+        "fileFields": {
+            "name": {
+                "selector": ".folder, i.fa-file",
+                "fallback": "text"
+            },
+            "size": {
+                "selector": ".file-size",
+                "attribute": "text"
+            }
+        }
+    },
+
+    "torrentConfig": {
+        "episodePatterns": [
+            "[-\\s](\\d{1,4})(?:\\s*[-~]\\s*(\\d{1,4}))?(?:\\s*(?:END|Final|Complete))?(?:\\s*[\\[\\(]|\\s*$)",
+            "Episode\\s*(\\d{1,4})(?:\\s*[-~]\\s*(\\d{1,4}))?",
+            "\\bE(?:p(?:isode)?)?\\s*(\\d{1,4})(?:\\s*[-~]\\s*(\\d{1,4}))?",
+            "\\bS\\d{1,2}E(\\d{1,4})(?:\\s*[-~]\\s*E?(\\d{1,4}))?",
+            "(?:^|\\s)(\\d{1,4})(?:\\s*[-~]\\s*(\\d{1,4}))?(?:\\s*(?:END|Final|Complete))?(?:\\s*[\\[\\(])"
+        ],
+        "batchIndicators": ["batch", "complete", "全話", "1-\\d+", "\\d+-\\d+"],
+        "videoExtensions": [".mkv", ".mp4", ".avi", ".webm", ".mov", ".wmv", ".flv", ".m4v"],
+        "defaultDownloadPath": "downloads/anime"
+    },
+
+    "notes": {
+        "contentType": "This is an anime torrent source - downloads are P2P via magnet links.",
+        "trustLevels": "Green rows are trusted uploaders, red rows are remakes/re-encodes.",
+        "fileSelection": "Users can select specific files from multi-file torrents to download.",
+        "episodeFiltering": "Results can be filtered by episode number ranges."
+    }
+}

@@ -4,6 +4,19 @@
     "baseUrl": "https://noveltrust.com",
     "enabled": true,
     "version": "1.0.0",
+    "contentType": "novel",
+
+    "capabilities": [
+        "search:browse",
+        "search:url",
+        "content:text",
+        "download:sequential",
+        "export:epub",
+        "export:pdf",
+        "export:docx",
+        "export:txt",
+        "export:html"
+    ],
 
     "http": {
         "timeout": 15000,

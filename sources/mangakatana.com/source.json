@@ -6,6 +6,15 @@
     "version": "1.0.0",
     "contentType": "manga",
 
+    "capabilities": [
+        "search:text",
+        "search:url",
+        "content:images",
+        "download:sequential",
+        "export:cbz",
+        "export:pdf"
+    ],
+
     "http": {
         "timeout": 20000,
         "retryAttempts": 3,
