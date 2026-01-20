@@ -4,6 +4,7 @@
  */
 
 import * as cheerio from 'cheerio';
+import fetch from 'node-fetch';
 import { log } from './logger.js';
 
 const CONFIG = {

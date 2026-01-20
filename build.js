@@ -71,13 +71,12 @@ async function build() {
                 entryPoints: ['src/index.js'],
                 bundle: true,
                 platform: 'node',
-                target: 'node18',
+                target: 'node16',
                 outfile: 'dist/noveldownloader.cjs',
                 format: 'cjs',
                 minify: false,
                 sourcemap: false,
-                // Externalize node: protocol imports that pkg can't handle
-                external: ['node:sqlite'],
+                // No externals - everything gets bundled or stubbed
                 // Handle import.meta.url for ESM compatibility
                 define: {
                     'import.meta.url': 'undefined'
@@ -86,27 +85,47 @@ async function build() {
                 banner: {
                     js: '"use strict";'
                 },
-                // Ignore optional dependencies that may not exist
+                // Handle problematic modules
                 plugins: [{
-                    name: 'ignore-optional',
+                    name: 'stub-problematic-modules',
                     setup(build) {
-                        // Mark node:sqlite as external and empty
+                        // Stub node:sqlite
                         build.onResolve({ filter: /^node:sqlite$/ }, () => ({
                             path: 'node:sqlite',
-                            external: true,
-                            sideEffects: false
+                            namespace: 'stub'
+                        }));
+
+                        // Stub undici completely - cheerio doesn't need it for HTML parsing
+                        build.onResolve({ filter: /^undici$/ }, () => ({
+                            path: 'undici',
+                            namespace: 'stub'
+                        }));
+
+                        // Return empty module for stubs
+                        build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
+                            contents: 'module.exports = {};',
+                            loader: 'js'
                         }));
                     }
                 }]
             });
             console.log('   ✓ Bundle created: dist/noveldownloader.cjs\n');
 
-            // Post-process: Remove/mock node:sqlite references that pkg can't handle
+            // Post-process: Remove/mock problematic module references that pkg can't handle
             let bundleContent = await fs.readFile('dist/noveldownloader.cjs', 'utf-8');
+
+            // Mock node:sqlite
             bundleContent = bundleContent.replace(
                 /require\(["']node:sqlite["']\)/g,
-                '({})'  // Replace with empty object
+                '({})'
             );
+
+            // Mock undici (cheerio uses it but we don't need it for HTML parsing)
+            bundleContent = bundleContent.replace(
+                /require\(["']undici["']\)/g,
+                '({ fetch: () => { throw new Error("undici not available"); } })'
+            );
+
             await fs.writeFile('dist/noveldownloader.cjs', bundleContent);
             console.log('   ✓ Bundle post-processed\n');
         } catch (err) {
@@ -119,9 +138,9 @@ async function build() {
         console.log('   (This may take a while on first run as it downloads Node.js binaries)\n');
 
         try {
-            // Use --no-bytecode to avoid compilation issues with bundled code
+            // Use node16 for better compatibility with pkg (node18 has issues with undici/File)
             const { stdout, stderr } = await execAsync(
-                'npx pkg dist/noveldownloader.cjs --targets node18-win-x64 --output dist/NovelDownloader.exe --no-bytecode --public-packages "*" --public',
+                'npx pkg dist/noveldownloader.cjs --targets node16-win-x64 --output dist/NovelDownloader.exe --no-bytecode --public-packages "*" --public',
                 { timeout: 600000 }
             );
             if (stdout) console.log(stdout);
@@ -138,7 +157,7 @@ async function build() {
 
             try {
                 await execAsync(
-                    'npx pkg dist/noveldownloader.cjs --targets node18-win-x64 --output dist/NovelDownloader.exe --no-bytecode',
+                    'npx pkg dist/noveldownloader.cjs --targets node16-win-x64 --output dist/NovelDownloader.exe --no-bytecode',
                     { timeout: 600000 }
                 );
                 console.log('   ✓ Executable created with alternative settings\n');
