@@ -151,6 +151,14 @@ async function build() {
             const sizeMB = (exeStats.size / (1024 * 1024)).toFixed(1);
 
             console.log(`   ✓ Executable created: dist/NovelDownloader.exe (${sizeMB} MB)\n`);
+
+            // Copy sources folder to dist for standalone exe
+            try {
+                await fs.cp('sources', 'dist/sources', { recursive: true });
+                console.log('   ✓ Sources folder copied to dist/\n');
+            } catch (cpErr) {
+                console.log('   ⚠ Could not copy sources folder:', cpErr.message, '\n');
+            }
         } catch (err) {
             console.error('   ✗ Executable creation failed:', err.message);
             console.log('\n   Trying alternative approach...\n');

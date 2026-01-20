@@ -1,6 +1,11 @@
 {
   "detailedLogs": false,
   "delayBetweenChapters": 400,
+  "basePath": "C:\\Users\\synte\\Documents\\books\\books",
+  "downloadPath": "downloads",
+  "dataPath": "data",
+  "exportPath": "exports",
+  "tempPath": "temp",
   "animeDownloadPath": "downloads/anime",
   "minSeeders": 20,
   "preferredQuality": "1080p",

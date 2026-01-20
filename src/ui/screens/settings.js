@@ -1,266 +1,223 @@
 /**
- * Settings Screen
- * Simple flat settings menu - no nested menus
+ * Settings Screen - Simple and functional
  */
 
-import path from 'path';
+import inquirer from 'inquirer';
 import chalk from 'chalk';
-import {
-  sectionHeader,
-  selectMenu,
-  textInput,
-  numberInput,
-  confirm,
-  success,
-  error,
-  info,
-  folderPicker
-} from '../components/index.js';
-import {
-  colors,
-  menuChoice,
-  backChoice
-} from '../theme/index.js';
+import path from 'path';
+import { folderPicker } from '../components/index.js';
 
 /**
- * Format a path for display (truncate if too long)
- */
-function formatPath(p, maxLen = 40) {
-  if (!p) return colors.muted('(default)');
-  if (p.length <= maxLen) return chalk.cyan(p);
-  return chalk.cyan('...' + p.slice(-maxLen + 3));
-}
-
-/**
- * Show settings menu - single flat list
+ * Show settings menu
  */
 export async function showSettings(settingsManager) {
-  const settings = settingsManager.getAll();
+  while (true) {
+    const settings = settingsManager.getAll();
 
-  // Build flat menu with all settings
-  const choices = [
-    // Paths section
-    { name: chalk.bold('── Paths ──'), value: '_sep1', disabled: '' },
-    {
-      name: `Base Folder        ${formatPath(settings.basePath || process.cwd())}`,
-      value: 'basePath'
-    },
-    {
-      name: `Novel/Manga Data   ${formatPath(settings.dataPath || 'data')}`,
-      value: 'dataPath'
-    },
-    {
-      name: `Exports            ${formatPath(settings.exportPath || 'exports')}`,
-      value: 'exportPath'
-    },
-    {
-      name: `Anime Downloads    ${formatPath(settings.animeDownloadPath || 'downloads/anime')}`,
-      value: 'animeDownloadPath'
-    },
+    console.log('\n' + chalk.cyan.bold('═══ Settings ═══') + '\n');
 
-    // Anime section
-    { name: chalk.bold('── Anime ──'), value: '_sep2', disabled: '' },
-    {
-      name: `Quality            ${chalk.cyan(settings.preferredQuality || '1080p')}`,
-      value: 'preferredQuality'
-    },
-    {
-      name: `Min Seeders        ${chalk.cyan(settings.minSeeders ?? 1)}`,
-      value: 'minSeeders'
-    },
-    {
-      name: `Trusted Only       ${settings.trustedOnly ? chalk.green('Yes') : colors.muted('No')}`,
-      value: 'trustedOnly'
-    },
+    const { choice } = await inquirer.prompt([{
+      type: 'list',
+      name: 'choice',
+      message: 'Select setting to change:',
+      pageSize: 15,
+      choices: [
+        new inquirer.Separator(chalk.gray('─── Paths ───')),
+        { name: `Base Folder       ${chalk.cyan(settings.basePath || '(current dir)')}`, value: 'basePath' },
+        { name: `Data Folder       ${chalk.cyan(settings.dataPath || 'data')}`, value: 'dataPath' },
+        { name: `Export Folder     ${chalk.cyan(settings.exportPath || 'exports')}`, value: 'exportPath' },
+        { name: `Anime Folder      ${chalk.cyan(settings.animeDownloadPath || 'downloads/anime')}`, value: 'animeDownloadPath' },
 
-    // Downloads section
-    { name: chalk.bold('── Downloads ──'), value: '_sep3', disabled: '' },
-    {
-      name: `Request Delay      ${chalk.cyan((settings.delayBetweenChapters || 400) + 'ms')}`,
-      value: 'delayBetweenChapters'
-    },
-    {
-      name: `Max Retries        ${chalk.cyan(settings.maxRetries || 3)}`,
-      value: 'maxRetries'
-    },
+        new inquirer.Separator(chalk.gray('─── Anime ───')),
+        { name: `Quality           ${chalk.cyan(settings.preferredQuality || '1080p')}`, value: 'quality' },
+        { name: `Min Seeders       ${chalk.cyan(settings.minSeeders ?? 1)}`, value: 'seeders' },
+        { name: `Trusted Only      ${settings.trustedOnly ? chalk.green('Yes') : chalk.gray('No')}`, value: 'trusted' },
 
-    // Actions
-    { name: chalk.bold('── Actions ──'), value: '_sep4', disabled: '' },
-    { name: chalk.yellow('Reset All to Defaults'), value: 'reset' },
+        new inquirer.Separator(chalk.gray('─── Downloads ───')),
+        { name: `Request Delay     ${chalk.cyan((settings.delayBetweenChapters || 400) + 'ms')}`, value: 'delay' },
 
-    backChoice('Back')
-  ];
+        new inquirer.Separator(chalk.gray('───────────────')),
+        { name: chalk.yellow('Reset to Defaults'), value: 'reset' },
+        { name: chalk.gray('← Back'), value: 'back' }
+      ]
+    }]);
 
-  console.log('\n' + sectionHeader('Settings'));
+    if (choice === 'back') {
+      return;
+    }
 
-  const choice = await selectMenu('', choices, { loop: false });
+    // Handle each setting
+    switch (choice) {
+      case 'basePath': {
+        const result = await pickFolder('Select base folder', settings.basePath);
+        if (result !== null) {
+          await settingsManager.set('basePath', result);
+          console.log(chalk.green('✓ Base folder updated'));
+        }
+        break;
+      }
 
-  // Handle separators
-  if (!choice || choice.startsWith('_sep')) {
-    return await showSettings(settingsManager);
-  }
+      case 'dataPath': {
+        const result = await editPath('Data folder:', settings.dataPath || 'data');
+        if (result !== null) {
+          await settingsManager.set('dataPath', result);
+          console.log(chalk.green('✓ Data folder updated'));
+        }
+        break;
+      }
 
-  // Handle selection
-  switch (choice) {
-    case 'basePath':
-      await editBasePath(settingsManager, settings);
-      return await showSettings(settingsManager);
+      case 'exportPath': {
+        const result = await editPath('Export folder:', settings.exportPath || 'exports');
+        if (result !== null) {
+          await settingsManager.set('exportPath', result);
+          console.log(chalk.green('✓ Export folder updated'));
+        }
+        break;
+      }
 
-    case 'dataPath':
-      await editPath(settingsManager, 'dataPath', 'Novel/Manga data folder:', settings.dataPath || 'data');
-      return await showSettings(settingsManager);
+      case 'animeDownloadPath': {
+        const result = await editPath('Anime folder:', settings.animeDownloadPath || 'downloads/anime');
+        if (result !== null) {
+          await settingsManager.set('animeDownloadPath', result);
+          console.log(chalk.green('✓ Anime folder updated'));
+        }
+        break;
+      }
 
-    case 'exportPath':
-      await editPath(settingsManager, 'exportPath', 'Exports folder:', settings.exportPath || 'exports');
-      return await showSettings(settingsManager);
+      case 'quality': {
+        const { quality } = await inquirer.prompt([{
+          type: 'list',
+          name: 'quality',
+          message: 'Preferred quality:',
+          choices: ['2160p (4K)', '1080p', '720p', '480p'],
+          default: settings.preferredQuality || '1080p'
+        }]);
+        const value = quality.split(' ')[0];
+        await settingsManager.set('preferredQuality', value);
+        console.log(chalk.green(`✓ Quality set to ${value}`));
+        break;
+      }
 
-    case 'animeDownloadPath':
-      await editPath(settingsManager, 'animeDownloadPath', 'Anime downloads folder:', settings.animeDownloadPath || 'downloads/anime');
-      return await showSettings(settingsManager);
-
-    case 'preferredQuality':
-      await editQuality(settingsManager, settings);
-      return await showSettings(settingsManager);
-
-    case 'minSeeders':
-      const seeders = await numberInput('Minimum seeders:', {
-        default: settings.minSeeders ?? 1,
-        min: 0,
-        max: 50
-      });
-      if (seeders !== undefined) {
+      case 'seeders': {
+        const { seeders } = await inquirer.prompt([{
+          type: 'number',
+          name: 'seeders',
+          message: 'Minimum seeders:',
+          default: settings.minSeeders ?? 1
+        }]);
         await settingsManager.set('minSeeders', seeders);
-        console.log(success('Updated'));
+        console.log(chalk.green(`✓ Min seeders set to ${seeders}`));
+        break;
       }
-      return await showSettings(settingsManager);
 
-    case 'trustedOnly':
-      await settingsManager.set('trustedOnly', !settings.trustedOnly);
-      console.log(success(`Trusted only: ${!settings.trustedOnly ? 'Yes' : 'No'}`));
-      return await showSettings(settingsManager);
+      case 'trusted': {
+        const newValue = !settings.trustedOnly;
+        await settingsManager.set('trustedOnly', newValue);
+        console.log(chalk.green(`✓ Trusted only: ${newValue ? 'Yes' : 'No'}`));
+        break;
+      }
 
-    case 'delayBetweenChapters':
-      const delay = await numberInput('Delay between requests (ms):', {
-        default: settings.delayBetweenChapters || 400,
-        min: 100,
-        max: 5000
-      });
-      if (delay !== undefined) {
+      case 'delay': {
+        const { delay } = await inquirer.prompt([{
+          type: 'number',
+          name: 'delay',
+          message: 'Delay between requests (ms):',
+          default: settings.delayBetweenChapters || 400
+        }]);
         await settingsManager.set('delayBetweenChapters', delay);
-        console.log(success('Updated'));
+        console.log(chalk.green(`✓ Delay set to ${delay}ms`));
+        break;
       }
-      return await showSettings(settingsManager);
 
-    case 'maxRetries':
-      const retries = await numberInput('Max retries:', {
-        default: settings.maxRetries || 3,
-        min: 1,
-        max: 10
-      });
-      if (retries !== undefined) {
-        await settingsManager.set('maxRetries', retries);
-        console.log(success('Updated'));
+      case 'reset': {
+        const { confirm } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirm',
+          message: 'Reset all settings to defaults?',
+          default: false
+        }]);
+        if (confirm) {
+          await settingsManager.reset();
+          console.log(chalk.green('✓ Settings reset to defaults'));
+        }
+        break;
       }
-      return await showSettings(settingsManager);
-
-    case 'reset':
-      const confirmed = await confirm('Reset all settings to defaults?', false);
-      if (confirmed) {
-        await settingsManager.reset();
-        console.log(success('Settings reset'));
-      }
-      return await showSettings(settingsManager);
-
-    default:
-      return null;
-  }
-}
-
-/**
- * Edit base path with folder picker
- */
-async function editBasePath(settingsManager, settings) {
-  const choices = [
-    { name: 'Browse...', value: 'browse' },
-    { name: 'Type path', value: 'type' },
-    { name: 'Use current directory', value: 'clear' },
-    backChoice('Cancel')
-  ];
-
-  const action = await selectMenu('Base folder:', choices);
-
-  switch (action) {
-    case 'browse':
-      console.log(info('Opening folder picker...'));
-      const selected = await folderPicker('Select Base Folder', settings.basePath || '');
-      if (selected) {
-        await settingsManager.set('basePath', selected);
-        console.log(success(`Set to: ${selected}`));
-      }
-      break;
-
-    case 'type':
-      const typed = await textInput('Base path:', { default: settings.basePath || '' });
-      if (typed !== undefined) {
-        await settingsManager.set('basePath', typed);
-        console.log(success(typed ? `Set to: ${typed}` : 'Using current directory'));
-      }
-      break;
-
-    case 'clear':
-      await settingsManager.set('basePath', '');
-      console.log(success('Using current directory'));
-      break;
-  }
-}
-
-/**
- * Edit a simple path setting
- */
-async function editPath(settingsManager, key, prompt, defaultVal) {
-  const choices = [
-    { name: 'Browse...', value: 'browse' },
-    { name: 'Type path', value: 'type' },
-    backChoice('Cancel')
-  ];
-
-  const action = await selectMenu(prompt, choices);
-
-  if (action === 'browse') {
-    console.log(info('Opening folder picker...'));
-    const selected = await folderPicker('Select Folder');
-    if (selected) {
-      await settingsManager.set(key, selected);
-      console.log(success(`Set to: ${selected}`));
-    }
-  } else if (action === 'type') {
-    const typed = await textInput('Path:', { default: defaultVal });
-    if (typed) {
-      await settingsManager.set(key, typed);
-      console.log(success(`Set to: ${typed}`));
     }
   }
 }
 
 /**
- * Edit quality preference
+ * Pick a folder with browse or type option
  */
-async function editQuality(settingsManager, settings) {
-  const choices = [
-    { name: '4K (2160p)', value: '2160p' },
-    { name: '1080p', value: '1080p' },
-    { name: '720p', value: '720p' },
-    { name: '480p', value: '480p' },
-    backChoice('Cancel')
-  ];
+async function pickFolder(title, currentValue) {
+  const { method } = await inquirer.prompt([{
+    type: 'list',
+    name: 'method',
+    message: title,
+    choices: [
+      { name: 'Browse...', value: 'browse' },
+      { name: 'Type path', value: 'type' },
+      { name: 'Clear (use current directory)', value: 'clear' },
+      { name: chalk.gray('Cancel'), value: 'cancel' }
+    ]
+  }]);
 
-  const quality = await selectMenu('Preferred quality:', choices);
-  if (quality) {
-    await settingsManager.set('preferredQuality', quality);
-    console.log(success(`Quality: ${quality}`));
+  if (method === 'cancel') return null;
+  if (method === 'clear') return '';
+
+  if (method === 'browse') {
+    console.log(chalk.gray('Opening folder picker...'));
+    const result = await folderPicker(title, currentValue || '');
+    return result || null;
   }
+
+  if (method === 'type') {
+    const { path } = await inquirer.prompt([{
+      type: 'input',
+      name: 'path',
+      message: 'Enter path:',
+      default: currentValue || ''
+    }]);
+    return path;
+  }
+
+  return null;
 }
 
-export default {
-  showSettings
-};
+/**
+ * Edit a path with type option
+ */
+async function editPath(message, currentValue) {
+  const { method } = await inquirer.prompt([{
+    type: 'list',
+    name: 'method',
+    message: message,
+    choices: [
+      { name: 'Browse...', value: 'browse' },
+      { name: 'Type path', value: 'type' },
+      { name: chalk.gray('Cancel'), value: 'cancel' }
+    ]
+  }]);
+
+  if (method === 'cancel') return null;
+
+  if (method === 'browse') {
+    console.log(chalk.gray('Opening folder picker...'));
+    const result = await folderPicker('Select folder', currentValue || '');
+    return result || null;
+  }
+
+  if (method === 'type') {
+    const { path } = await inquirer.prompt([{
+      type: 'input',
+      name: 'path',
+      message: 'Enter path:',
+      default: currentValue
+    }]);
+    return path;
+  }
+
+  return null;
+}
+
+export default { showSettings };

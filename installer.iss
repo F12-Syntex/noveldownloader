@@ -44,6 +44,7 @@ Name: "addtopath"; Description: "Add to PATH (run 'noveldownloader' from command
 
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "sources\*"; DestDir: "{app}\sources"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

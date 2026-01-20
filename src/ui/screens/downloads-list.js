@@ -46,7 +46,7 @@ export async function showDownloadsList(storage) {
   // Get downloaded content from storage
   let downloads;
   try {
-    downloads = await storage.listDownloads(source?.contentType);
+    downloads = await storage.getAllDownloads();
   } catch (err) {
     console.log(error(`Failed to load downloads: ${err.message}`));
     return null;

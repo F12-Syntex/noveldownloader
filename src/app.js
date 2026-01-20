@@ -239,7 +239,7 @@ class App {
 
     // Save to storage
     try {
-      await storage.saveNovel(contentInfo, results.chapters);
+      await storage.saveMetadata(contentInfo);
       console.log(success('Saved to library'));
     } catch (err) {
       console.log(warning(`Could not save to library: ${err.message}`));

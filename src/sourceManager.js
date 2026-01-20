@@ -5,11 +5,18 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { log } from './logger.js';
 
-// Handle both ESM and bundled CJS contexts
-const SOURCES_DIR = path.join(process.cwd(), 'sources');
+// Get sources directory - use executable's directory for bundled app, cwd for dev
+function getSourcesDir() {
+    // Check if running as pkg bundle (snapshot filesystem)
+    if (process.pkg || process.execPath.includes('snapshot')) {
+        return path.join(path.dirname(process.execPath), 'sources');
+    }
+    return path.join(process.cwd(), 'sources');
+}
+
+const SOURCES_DIR = getSourcesDir();
 
 // Cache of loaded sources
 let sourcesCache = null;

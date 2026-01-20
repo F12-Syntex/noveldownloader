@@ -67,7 +67,7 @@ export async function selectContentToExport(storage) {
   // Get downloaded content
   let downloads;
   try {
-    downloads = await storage.listDownloads(source?.contentType);
+    downloads = await storage.getAllDownloads();
   } catch (err) {
     console.log(error(`Failed to load downloads: ${err.message}`));
     return null;
