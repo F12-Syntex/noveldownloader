@@ -1,20 +1,18 @@
 /**
  * Settings Screen
- * Handles user preferences and configuration
+ * Simple flat settings menu - no nested menus
  */
 
 import path from 'path';
+import chalk from 'chalk';
 import {
   sectionHeader,
-  settingsPanel,
   selectMenu,
   textInput,
   numberInput,
   confirm,
-  pressEnter,
   success,
   error,
-  warning,
   info,
   folderPicker
 } from '../components/index.js';
@@ -25,51 +23,153 @@ import {
 } from '../theme/index.js';
 
 /**
- * Show main settings menu
- * @param {Object} settingsManager - Settings manager instance
- * @returns {Promise<string|null>} Action taken or null
+ * Format a path for display (truncate if too long)
+ */
+function formatPath(p, maxLen = 40) {
+  if (!p) return colors.muted('(default)');
+  if (p.length <= maxLen) return chalk.cyan(p);
+  return chalk.cyan('...' + p.slice(-maxLen + 3));
+}
+
+/**
+ * Show settings menu - single flat list
  */
 export async function showSettings(settingsManager) {
-  console.log('\n' + sectionHeader('Settings'));
-  console.log('');
-
   const settings = settingsManager.getAll();
-  const basePathDisplay = settings.basePath || '(current directory)';
 
+  // Build flat menu with all settings
   const choices = [
-    menuChoice('Base Path', 'basePath', basePathDisplay),
-    menuChoice('Download Settings', 'download', 'Paths, rate limits, etc.'),
-    menuChoice('Anime Settings', 'anime', 'Torrent, quality preferences'),
-    menuChoice('Export Settings', 'export', 'Default format, output path'),
-    menuChoice('Display Settings', 'display', 'UI preferences'),
-    menuChoice('View All Settings', 'view', 'See current configuration'),
-    menuChoice('Reset to Defaults', 'reset', 'Restore default settings'),
-    backChoice('Back to Main Menu')
+    // Paths section
+    { name: chalk.bold('── Paths ──'), value: '_sep1', disabled: '' },
+    {
+      name: `Base Folder        ${formatPath(settings.basePath || process.cwd())}`,
+      value: 'basePath'
+    },
+    {
+      name: `Novel/Manga Data   ${formatPath(settings.dataPath || 'data')}`,
+      value: 'dataPath'
+    },
+    {
+      name: `Exports            ${formatPath(settings.exportPath || 'exports')}`,
+      value: 'exportPath'
+    },
+    {
+      name: `Anime Downloads    ${formatPath(settings.animeDownloadPath || 'downloads/anime')}`,
+      value: 'animeDownloadPath'
+    },
+
+    // Anime section
+    { name: chalk.bold('── Anime ──'), value: '_sep2', disabled: '' },
+    {
+      name: `Quality            ${chalk.cyan(settings.preferredQuality || '1080p')}`,
+      value: 'preferredQuality'
+    },
+    {
+      name: `Min Seeders        ${chalk.cyan(settings.minSeeders ?? 1)}`,
+      value: 'minSeeders'
+    },
+    {
+      name: `Trusted Only       ${settings.trustedOnly ? chalk.green('Yes') : colors.muted('No')}`,
+      value: 'trustedOnly'
+    },
+
+    // Downloads section
+    { name: chalk.bold('── Downloads ──'), value: '_sep3', disabled: '' },
+    {
+      name: `Request Delay      ${chalk.cyan((settings.delayBetweenChapters || 400) + 'ms')}`,
+      value: 'delayBetweenChapters'
+    },
+    {
+      name: `Max Retries        ${chalk.cyan(settings.maxRetries || 3)}`,
+      value: 'maxRetries'
+    },
+
+    // Actions
+    { name: chalk.bold('── Actions ──'), value: '_sep4', disabled: '' },
+    { name: chalk.yellow('Reset All to Defaults'), value: 'reset' },
+
+    backChoice('Back')
   ];
 
-  const section = await selectMenu('Select settings section:', choices);
+  console.log('\n' + sectionHeader('Settings'));
 
-  switch (section) {
+  const choice = await selectMenu('', choices, { loop: false });
+
+  // Handle separators
+  if (!choice || choice.startsWith('_sep')) {
+    return await showSettings(settingsManager);
+  }
+
+  // Handle selection
+  switch (choice) {
     case 'basePath':
-      return await showBasePathSettings(settingsManager);
+      await editBasePath(settingsManager, settings);
+      return await showSettings(settingsManager);
 
-    case 'download':
-      return await showDownloadSettings(settingsManager);
+    case 'dataPath':
+      await editPath(settingsManager, 'dataPath', 'Novel/Manga data folder:', settings.dataPath || 'data');
+      return await showSettings(settingsManager);
 
-    case 'anime':
-      return await showAnimeSettings(settingsManager);
+    case 'exportPath':
+      await editPath(settingsManager, 'exportPath', 'Exports folder:', settings.exportPath || 'exports');
+      return await showSettings(settingsManager);
 
-    case 'export':
-      return await showExportSettings(settingsManager);
+    case 'animeDownloadPath':
+      await editPath(settingsManager, 'animeDownloadPath', 'Anime downloads folder:', settings.animeDownloadPath || 'downloads/anime');
+      return await showSettings(settingsManager);
 
-    case 'display':
-      return await showDisplaySettings(settingsManager);
+    case 'preferredQuality':
+      await editQuality(settingsManager, settings);
+      return await showSettings(settingsManager);
 
-    case 'view':
-      return await viewAllSettings(settingsManager);
+    case 'minSeeders':
+      const seeders = await numberInput('Minimum seeders:', {
+        default: settings.minSeeders ?? 1,
+        min: 0,
+        max: 50
+      });
+      if (seeders !== undefined) {
+        await settingsManager.set('minSeeders', seeders);
+        console.log(success('Updated'));
+      }
+      return await showSettings(settingsManager);
+
+    case 'trustedOnly':
+      await settingsManager.set('trustedOnly', !settings.trustedOnly);
+      console.log(success(`Trusted only: ${!settings.trustedOnly ? 'Yes' : 'No'}`));
+      return await showSettings(settingsManager);
+
+    case 'delayBetweenChapters':
+      const delay = await numberInput('Delay between requests (ms):', {
+        default: settings.delayBetweenChapters || 400,
+        min: 100,
+        max: 5000
+      });
+      if (delay !== undefined) {
+        await settingsManager.set('delayBetweenChapters', delay);
+        console.log(success('Updated'));
+      }
+      return await showSettings(settingsManager);
+
+    case 'maxRetries':
+      const retries = await numberInput('Max retries:', {
+        default: settings.maxRetries || 3,
+        min: 1,
+        max: 10
+      });
+      if (retries !== undefined) {
+        await settingsManager.set('maxRetries', retries);
+        console.log(success('Updated'));
+      }
+      return await showSettings(settingsManager);
 
     case 'reset':
-      return await resetSettings(settingsManager);
+      const confirmed = await confirm('Reset all settings to defaults?', false);
+      if (confirmed) {
+        await settingsManager.reset();
+        console.log(success('Settings reset'));
+      }
+      return await showSettings(settingsManager);
 
     default:
       return null;
@@ -77,362 +177,88 @@ export async function showSettings(settingsManager) {
 }
 
 /**
- * Base path settings - configure where all files are stored
+ * Edit base path with folder picker
  */
-async function showBasePathSettings(settingsManager) {
-  const settings = settingsManager.getAll();
-
-  console.log('\n' + sectionHeader('Base Path Settings'));
-  console.log('');
-
-  const currentBase = settings.basePath || process.cwd();
-  console.log(info(`Current base path: ${currentBase}`));
-  console.log(colors.muted('All relative paths (downloads, data, exports) will be relative to this.'));
-  console.log('');
-
-  // Show resolved paths
-  const resolvedPaths = {
-    'Downloads': path.resolve(currentBase, settings.downloadPath || 'downloads'),
-    'Data': path.resolve(currentBase, settings.dataPath || 'data'),
-    'Exports': path.resolve(currentBase, settings.exportPath || 'exports'),
-    'Anime': path.resolve(currentBase, settings.animeDownloadPath || 'downloads/anime'),
-  };
-
-  console.log(colors.muted('Resolved paths:'));
-  for (const [name, resolvedPath] of Object.entries(resolvedPaths)) {
-    console.log(colors.muted(`  ${name}: ${resolvedPath}`));
-  }
-  console.log('');
-
+async function editBasePath(settingsManager, settings) {
   const choices = [
-    menuChoice('Browse for folder', 'browse', 'Open folder picker'),
-    menuChoice('Enter path manually', 'manual', 'Type the path'),
-    menuChoice('Clear (use current directory)', 'clear', 'Reset to app directory'),
-    backChoice('Back')
+    { name: 'Browse...', value: 'browse' },
+    { name: 'Type path', value: 'type' },
+    { name: 'Use current directory', value: 'clear' },
+    backChoice('Cancel')
   ];
 
-  const action = await selectMenu('How would you like to set the base path?', choices);
+  const action = await selectMenu('Base folder:', choices);
 
   switch (action) {
     case 'browse':
       console.log(info('Opening folder picker...'));
-      const selectedPath = await folderPicker('Select Base Folder', settings.basePath || '');
-      if (selectedPath) {
-        await settingsManager.set('basePath', selectedPath);
-        console.log(success(`Base path set to: ${selectedPath}`));
-      } else {
-        console.log(warning('No folder selected'));
+      const selected = await folderPicker('Select Base Folder', settings.basePath || '');
+      if (selected) {
+        await settingsManager.set('basePath', selected);
+        console.log(success(`Set to: ${selected}`));
       }
       break;
 
-    case 'manual':
-      const manualPath = await textInput('Enter base path:', {
-        default: settings.basePath || ''
-      });
-      if (manualPath !== undefined) {
-        await settingsManager.set('basePath', manualPath);
-        console.log(success(`Base path set to: ${manualPath || '(current directory)'}`));
+    case 'type':
+      const typed = await textInput('Base path:', { default: settings.basePath || '' });
+      if (typed !== undefined) {
+        await settingsManager.set('basePath', typed);
+        console.log(success(typed ? `Set to: ${typed}` : 'Using current directory'));
       }
       break;
 
     case 'clear':
       await settingsManager.set('basePath', '');
-      console.log(success('Base path cleared - using current directory'));
+      console.log(success('Using current directory'));
       break;
   }
-
-  return action;
 }
 
 /**
- * Download settings
+ * Edit a simple path setting
  */
-async function showDownloadSettings(settingsManager) {
-  const settings = settingsManager.getAll();
-
-  console.log('\n' + sectionHeader('Download Settings'));
-  console.log('');
-
+async function editPath(settingsManager, key, prompt, defaultVal) {
   const choices = [
-    menuChoice('Download Path', 'downloadPath', settings.downloadPath || 'downloads'),
-    menuChoice('Data Path', 'dataPath', settings.dataPath || 'data'),
-    menuChoice('Rate Limit', 'rateLimit', `${settings.rateLimit || 300}ms between requests`),
-    menuChoice('Max Retries', 'maxRetries', `${settings.maxRetries || 3} attempts`),
-    menuChoice('Concurrent Downloads', 'concurrent', `${settings.concurrentDownloads || 1}`),
-    backChoice('Back')
+    { name: 'Browse...', value: 'browse' },
+    { name: 'Type path', value: 'type' },
+    backChoice('Cancel')
   ];
 
-  const setting = await selectMenu('Select setting to change:', choices);
+  const action = await selectMenu(prompt, choices);
 
-  switch (setting) {
-    case 'downloadPath':
-      const newPath = await textInput('Download path:', {
-        default: settings.downloadPath || 'downloads'
-      });
-      if (newPath) {
-        await settingsManager.set('downloadPath', newPath);
-        console.log(success('Download path updated'));
-      }
-      break;
-
-    case 'dataPath':
-      const newDataPath = await textInput('Data path (novel/manga storage):', {
-        default: settings.dataPath || 'data'
-      });
-      if (newDataPath) {
-        await settingsManager.set('dataPath', newDataPath);
-        console.log(success('Data path updated'));
-      }
-      break;
-
-    case 'rateLimit':
-      const newRate = await numberInput('Rate limit (ms between requests):', {
-        default: settings.rateLimit || 300,
-        min: 100,
-        max: 5000
-      });
-      if (newRate !== undefined) {
-        await settingsManager.set('rateLimit', newRate);
-        console.log(success('Rate limit updated'));
-      }
-      break;
-
-    case 'maxRetries':
-      const newRetries = await numberInput('Max retry attempts:', {
-        default: settings.maxRetries || 3,
-        min: 1,
-        max: 10
-      });
-      if (newRetries !== undefined) {
-        await settingsManager.set('maxRetries', newRetries);
-        console.log(success('Max retries updated'));
-      }
-      break;
-
-    case 'concurrent':
-      const newConcurrent = await numberInput('Concurrent downloads:', {
-        default: settings.concurrentDownloads || 1,
-        min: 1,
-        max: 5
-      });
-      if (newConcurrent !== undefined) {
-        await settingsManager.set('concurrentDownloads', newConcurrent);
-        console.log(success('Concurrent downloads updated'));
-      }
-      break;
-  }
-
-  return setting;
-}
-
-/**
- * Anime/torrent settings
- */
-async function showAnimeSettings(settingsManager) {
-  const settings = settingsManager.getAll();
-
-  console.log('\n' + sectionHeader('Anime Settings'));
-  console.log('');
-
-  const choices = [
-    menuChoice('Anime Download Path', 'animeDownloadPath', settings.animeDownloadPath || 'downloads/anime'),
-    menuChoice('Minimum Seeders', 'minSeeders', `${settings.minSeeders || 1}`),
-    menuChoice('Trusted Only', 'trustedOnly', settings.trustedOnly ? 'Yes' : 'No'),
-    menuChoice('Preferred Quality', 'preferredQuality', settings.preferredQuality || '1080p'),
-    backChoice('Back')
-  ];
-
-  const setting = await selectMenu('Select setting to change:', choices);
-
-  switch (setting) {
-    case 'animeDownloadPath':
-      const newPath = await textInput('Anime download path:', {
-        default: settings.animeDownloadPath || 'downloads/anime'
-      });
-      if (newPath) {
-        await settingsManager.set('animeDownloadPath', newPath);
-        console.log(success('Anime download path updated'));
-      }
-      break;
-
-    case 'minSeeders':
-      const newMin = await numberInput('Minimum seeders:', {
-        default: settings.minSeeders || 1,
-        min: 0,
-        max: 100
-      });
-      if (newMin !== undefined) {
-        await settingsManager.set('minSeeders', newMin);
-        console.log(success('Minimum seeders updated'));
-      }
-      break;
-
-    case 'trustedOnly':
-      const newTrusted = await confirm('Only show trusted uploads?', settings.trustedOnly || false);
-      await settingsManager.set('trustedOnly', newTrusted);
-      console.log(success('Trusted only setting updated'));
-      break;
-
-    case 'preferredQuality':
-      const qualityChoices = [
-        menuChoice('1080p', '1080p'),
-        menuChoice('720p', '720p'),
-        menuChoice('480p', '480p'),
-        menuChoice('4K', '2160p'),
-        backChoice('Cancel')
-      ];
-      const quality = await selectMenu('Preferred quality:', qualityChoices);
-      if (quality) {
-        await settingsManager.set('preferredQuality', quality);
-        console.log(success('Preferred quality updated'));
-      }
-      break;
-  }
-
-  return setting;
-}
-
-/**
- * Export settings
- */
-async function showExportSettings(settingsManager) {
-  const settings = settingsManager.getAll();
-
-  console.log('\n' + sectionHeader('Export Settings'));
-  console.log('');
-
-  const choices = [
-    menuChoice('Export Path', 'exportPath', settings.exportPath || 'exports'),
-    menuChoice('Temp Path', 'tempPath', settings.tempPath || 'temp'),
-    menuChoice('Default Format', 'defaultFormat', settings.defaultExportFormat || 'epub'),
-    menuChoice('Include Metadata', 'includeMetadata', settings.includeMetadata !== false ? 'Yes' : 'No'),
-    backChoice('Back')
-  ];
-
-  const setting = await selectMenu('Select setting to change:', choices);
-
-  switch (setting) {
-    case 'exportPath':
-      const newExportPath = await textInput('Export path:', {
-        default: settings.exportPath || 'exports'
-      });
-      if (newExportPath) {
-        await settingsManager.set('exportPath', newExportPath);
-        console.log(success('Export path updated'));
-      }
-      break;
-
-    case 'tempPath':
-      const newTempPath = await textInput('Temp path (for export processing):', {
-        default: settings.tempPath || 'temp'
-      });
-      if (newTempPath) {
-        await settingsManager.set('tempPath', newTempPath);
-        console.log(success('Temp path updated'));
-      }
-      break;
-
-    case 'defaultFormat':
-      const formatChoices = [
-        menuChoice('EPUB', 'epub', 'E-book format'),
-        menuChoice('PDF', 'pdf', 'Portable document'),
-        menuChoice('CBZ', 'cbz', 'Comic book archive'),
-        menuChoice('TXT', 'txt', 'Plain text'),
-        backChoice('Cancel')
-      ];
-      const format = await selectMenu('Default export format:', formatChoices);
-      if (format) {
-        await settingsManager.set('defaultExportFormat', format);
-        console.log(success('Default format updated'));
-      }
-      break;
-
-    case 'includeMetadata':
-      const newMeta = await confirm('Include metadata in exports?', settings.includeMetadata !== false);
-      await settingsManager.set('includeMetadata', newMeta);
-      console.log(success('Metadata setting updated'));
-      break;
-  }
-
-  return setting;
-}
-
-/**
- * Display settings
- */
-async function showDisplaySettings(settingsManager) {
-  const settings = settingsManager.getAll();
-
-  console.log('\n' + sectionHeader('Display Settings'));
-  console.log('');
-
-  const choices = [
-    menuChoice('Color Theme', 'theme', settings.theme || 'default'),
-    menuChoice('Show Banner', 'showBanner', settings.showBanner !== false ? 'Yes' : 'No'),
-    menuChoice('Page Size', 'pageSize', `${settings.pageSize || 12} items`),
-    backChoice('Back')
-  ];
-
-  const setting = await selectMenu('Select setting to change:', choices);
-
-  switch (setting) {
-    case 'theme':
-      console.log(info('Theme customization coming soon'));
-      await pressEnter();
-      break;
-
-    case 'showBanner':
-      const newBanner = await confirm('Show application banner?', settings.showBanner !== false);
-      await settingsManager.set('showBanner', newBanner);
-      console.log(success('Banner setting updated'));
-      break;
-
-    case 'pageSize':
-      const newSize = await numberInput('Menu page size:', {
-        default: settings.pageSize || 12,
-        min: 5,
-        max: 30
-      });
-      if (newSize !== undefined) {
-        await settingsManager.set('pageSize', newSize);
-        console.log(success('Page size updated'));
-      }
-      break;
-  }
-
-  return setting;
-}
-
-/**
- * View all settings
- */
-async function viewAllSettings(settingsManager) {
-  const settings = settingsManager.getAll();
-
-  console.log('\n' + sectionHeader('Current Settings'));
-  console.log('');
-  console.log(settingsPanel(settings));
-
-  await pressEnter();
-  return 'viewed';
-}
-
-/**
- * Reset all settings to defaults
- */
-async function resetSettings(settingsManager) {
-  const confirmed = await confirm('Reset all settings to defaults? This cannot be undone.', false);
-
-  if (confirmed) {
-    try {
-      await settingsManager.reset();
-      console.log(success('Settings reset to defaults'));
-    } catch (err) {
-      console.log(error(`Failed to reset: ${err.message}`));
+  if (action === 'browse') {
+    console.log(info('Opening folder picker...'));
+    const selected = await folderPicker('Select Folder');
+    if (selected) {
+      await settingsManager.set(key, selected);
+      console.log(success(`Set to: ${selected}`));
+    }
+  } else if (action === 'type') {
+    const typed = await textInput('Path:', { default: defaultVal });
+    if (typed) {
+      await settingsManager.set(key, typed);
+      console.log(success(`Set to: ${typed}`));
     }
   }
+}
 
-  return confirmed ? 'reset' : null;
+/**
+ * Edit quality preference
+ */
+async function editQuality(settingsManager, settings) {
+  const choices = [
+    { name: '4K (2160p)', value: '2160p' },
+    { name: '1080p', value: '1080p' },
+    { name: '720p', value: '720p' },
+    { name: '480p', value: '480p' },
+    backChoice('Cancel')
+  ];
+
+  const quality = await selectMenu('Preferred quality:', choices);
+  if (quality) {
+    await settingsManager.set('preferredQuality', quality);
+    console.log(success(`Quality: ${quality}`));
+  }
 }
 
 export default {
