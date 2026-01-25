@@ -2,7 +2,7 @@
 
 /**
  * Novel Downloader CLI
- * An interactive CLI for downloading novels from NovelFull.net
+ * An interactive CLI for downloading novels from multiple sources
  */
 
 import inquirer from 'inquirer';
@@ -14,9 +14,6 @@ import {
     exportToHtml, exportToTxt, exportToRtf, exportToAzw3, exportToMobi,
     listExports, checkPandoc, checkLatex, checkCalibre
 } from './exporter.js';
-
-// Cache for dependency checks (to avoid repeated checks)
-let depCache = { pandoc: null, latex: null, calibre: null };
 import * as storage from './storage.js';
 import { log, setDetailedLogs } from './logger.js';
 import { loadSettings, setSetting, getSettings } from './settings.js';
@@ -28,7 +25,87 @@ import {
     getTerms
 } from './sourceManager.js';
 
-// ASCII Art Banner
+// ============================================================================
+// Navigation System
+// ============================================================================
+
+// Navigation history stack
+const navHistory = [];
+
+// Navigation constants
+const NAV = {
+    BACK: Symbol('back'),
+    HOME: Symbol('home'),
+    EXIT: Symbol('exit'),
+    STAY: Symbol('stay'),
+};
+
+/**
+ * Push current screen to history
+ */
+function pushHistory(screen, context = {}) {
+    navHistory.push({ screen, context });
+}
+
+/**
+ * Pop and return previous screen from history
+ */
+function popHistory() {
+    return navHistory.pop();
+}
+
+/**
+ * Clear navigation history
+ */
+function clearHistory() {
+    navHistory.length = 0;
+}
+
+/**
+ * Get back choice for menus
+ */
+function getBackChoice(label = '← Back') {
+    return { name: chalk.gray(label), value: NAV.BACK };
+}
+
+/**
+ * Handle navigation result
+ * Returns the next screen to show, or null to exit
+ */
+function handleNavigation(result) {
+    if (result === NAV.BACK) {
+        const prev = popHistory();
+        return prev ? prev.screen : 'main';
+    }
+    if (result === NAV.HOME) {
+        clearHistory();
+        return 'main';
+    }
+    if (result === NAV.EXIT) {
+        return null;
+    }
+    if (result === NAV.STAY) {
+        // Stay on current screen (re-run it)
+        const current = navHistory[navHistory.length - 1];
+        return current ? current.screen : 'main';
+    }
+    return result;
+}
+
+// ============================================================================
+// Cache & State
+// ============================================================================
+
+// Cache for dependency checks
+let depCache = { pandoc: null, latex: null, calibre: null };
+
+// ============================================================================
+// UI Helpers
+// ============================================================================
+
+/**
+ * ASCII Art Banner
+ */
 function getBanner() {
     const activeSource = getActiveSource();
     const sourceName = activeSource ? activeSource.name : 'No source selected';
@@ -43,9 +120,37 @@ ${chalk.cyan('╚═════════════════════
 }
 
 /**
- * Main menu options
+ * Create a simple ASCII progress bar
  */
-async function mainMenu() {
+function createProgressBar(percentage, width = 20) {
+    const filled = Math.round((percentage / 100) * width);
+    const empty = width - filled;
+    const bar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
+    return `[${bar}] ${percentage}%`;
+}
+
+/**
+ * Wait for user to press enter
+ */
+async function pressEnterToContinue() {
+    const readline = await import('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    return new Promise(resolve => {
+        rl.question(chalk.gray('\nPress Enter to continue...'), () => {
+            rl.close();
+            resolve();
+        });
+    });
+}
+
+// ============================================================================
+// Screens
+// ============================================================================
+
+/**
+ * Main menu screen
+ */
+async function mainMenuScreen() {
     console.clear();
     console.log(getBanner());
 
@@ -62,7 +167,7 @@ async function mainMenu() {
                 new inquirer.Separator(),
                 { name: 'Dependencies', value: 'dependencies' },
                 { name: 'Settings', value: 'settings' },
-                { name: 'Exit', value: 'exit' }
+                { name: 'Exit', value: NAV.EXIT }
             ],
             loop: false
         }
@@ -72,9 +177,9 @@ async function mainMenu() {
 }
 
 /**
- * Download new novel flow
+ * Download new novel screen
  */
-async function downloadNewNovel() {
+async function downloadScreen() {
     const t = getTerms();
     console.clear();
     console.log(chalk.cyan(`━━━ Download New ${t.Item} ━━━\n`));
@@ -84,20 +189,27 @@ async function downloadNewNovel() {
     if (!activeSource) {
         console.log(chalk.yellow('No source selected. Please select a source in Settings.'));
         await pressEnterToContinue();
-        return;
+        return NAV.BACK;
     }
 
     console.log(chalk.gray(`Searching on: ${activeSource.name}\n`));
 
-    // Get search query
+    // Get search query with back option
     const { query } = await inquirer.prompt([
         {
             type: 'input',
             name: 'query',
-            message: `Search for ${t.item}:`,
-            validate: (input) => input.trim().length > 0 || 'Please enter a search term'
+            message: `Search for ${t.item} (or 'back' to go back):`,
+            validate: (input) => {
+                if (input.trim().toLowerCase() === 'back') return true;
+                return input.trim().length > 0 || 'Please enter a search term';
+            }
         }
     ]);
+
+    if (query.trim().toLowerCase() === 'back') {
+        return NAV.BACK;
+    }
 
     console.log(chalk.gray('\nSearching...'));
 
@@ -107,7 +219,7 @@ async function downloadNewNovel() {
         if (results.length === 0) {
             console.log(chalk.yellow(`\nNo ${t.items} found. Try a different search term.`));
             await pressEnterToContinue();
-            return;
+            return NAV.STAY;
         }
 
         // Let user select a novel
@@ -122,14 +234,16 @@ async function downloadNewNovel() {
                         value: novel
                     })),
                     new inquirer.Separator(),
-                    { name: chalk.gray('← Cancel'), value: null }
+                    getBackChoice('← Back to search')
                 ],
                 pageSize: 15,
                 loop: false
             }
         ]);
 
-        if (!selectedNovel) return;
+        if (selectedNovel === NAV.BACK) {
+            return NAV.STAY;
+        }
 
         console.log(chalk.gray(`\nFetching ${t.item} details...`));
 
@@ -151,16 +265,22 @@ async function downloadNewNovel() {
         }
 
         // Confirm download
-        const { confirm } = await inquirer.prompt([
+        const { confirmAction } = await inquirer.prompt([
             {
-                type: 'confirm',
-                name: 'confirm',
+                type: 'list',
+                name: 'confirmAction',
                 message: `Download ${novelDetails.totalChapters} ${t.units}?`,
-                default: true
+                choices: [
+                    { name: 'Yes, download', value: 'yes' },
+                    { name: 'No, go back', value: NAV.BACK }
+                ],
+                loop: false
             }
         ]);
 
-        if (!confirm) return;
+        if (confirmAction === NAV.BACK) {
+            return NAV.STAY;
+        }
 
         // Start download
         const result = await downloadNovel(novelDetails);
@@ -194,12 +314,13 @@ async function downloadNewNovel() {
     }
 
     await pressEnterToContinue();
+    return NAV.BACK;
 }
 
 /**
- * View downloads
+ * View downloads screen
  */
-async function viewDownloads() {
+async function downloadsScreen() {
     const t = getTerms();
     console.clear();
     console.log(chalk.cyan('━━━ Your Downloads ━━━\n'));
@@ -209,7 +330,7 @@ async function viewDownloads() {
     if (downloads.length === 0) {
         console.log(chalk.gray(`No ${t.items} downloaded yet.`));
         await pressEnterToContinue();
-        return;
+        return NAV.BACK;
     }
 
     // Get progress for each novel
@@ -252,13 +373,13 @@ async function viewDownloads() {
                 { name: `Retry failed ${t.units}`, value: 'retry' },
                 { name: `Delete a ${t.item}`, value: 'delete' },
                 new inquirer.Separator(),
-                { name: chalk.gray('← Back to menu'), value: 'back' }
+                getBackChoice()
             ],
             loop: false
         }
     ]);
 
-    if (action === 'back') return;
+    if (action === NAV.BACK) return NAV.BACK;
 
     // Select a novel for the action
     const { selectedNovel } = await inquirer.prompt([
@@ -272,18 +393,17 @@ async function viewDownloads() {
                     value: n
                 })),
                 new inquirer.Separator(),
-                { name: chalk.gray('← Cancel'), value: null }
+                getBackChoice('← Cancel')
             ],
             loop: false
         }
     ]);
 
-    if (!selectedNovel) return;
+    if (selectedNovel === NAV.BACK) return NAV.STAY;
 
     if (action === 'resume') {
         console.log(chalk.gray('\nResuming download...'));
 
-        // Re-fetch novel details to get chapter list
         try {
             const novelDetails = await getNovelDetails(selectedNovel.url);
             await downloadNovel(novelDetails, { skipExisting: true });
@@ -297,10 +417,14 @@ async function viewDownloads() {
     } else if (action === 'delete') {
         const { confirm } = await inquirer.prompt([
             {
-                type: 'confirm',
+                type: 'list',
                 name: 'confirm',
                 message: `Delete "${selectedNovel.title}" and all downloaded ${t.units}?`,
-                default: false
+                choices: [
+                    { name: 'Yes, delete', value: true },
+                    { name: 'No, cancel', value: false }
+                ],
+                loop: false
             }
         ]);
 
@@ -311,12 +435,13 @@ async function viewDownloads() {
     }
 
     await pressEnterToContinue();
+    return NAV.STAY;
 }
 
 /**
- * Export novel flow
+ * Export novel screen
  */
-async function exportNovel() {
+async function exportScreen() {
     const t = getTerms();
     console.clear();
     console.log(chalk.cyan(`━━━ Export ${t.Item} ━━━\n`));
@@ -326,7 +451,7 @@ async function exportNovel() {
     if (downloads.length === 0) {
         console.log(chalk.gray(`No ${t.items} downloaded yet. Download a ${t.item} first.`));
         await pressEnterToContinue();
-        return;
+        return NAV.BACK;
     }
 
     // Show existing exports
@@ -354,20 +479,20 @@ async function exportNovel() {
                     };
                 }),
                 new inquirer.Separator(),
-                { name: chalk.gray('← Cancel'), value: null }
+                getBackChoice()
             ],
             loop: false
         }
     ]);
 
-    if (!selectedNovel) return;
+    if (selectedNovel === NAV.BACK) return NAV.BACK;
 
     // Check if there are downloaded chapters
     const downloadedChapters = await storage.getDownloadedChapters(selectedNovel.title);
     if (downloadedChapters.length === 0) {
         console.log(chalk.yellow(`\nNo ${t.units} downloaded for this ${t.item} yet.`));
         await pressEnterToContinue();
-        return;
+        return NAV.STAY;
     }
 
     // Check dependencies for format indicators
@@ -401,14 +526,14 @@ async function exportNovel() {
                 { name: '    HTML (web page)', value: 'html' },
                 { name: '    TXT (plain text)', value: 'txt' },
                 new inquirer.Separator(),
-                { name: chalk.gray('← Cancel'), value: null }
+                getBackChoice()
             ],
             pageSize: 15,
             loop: false
         }
     ]);
 
-    if (!format) return;
+    if (format === NAV.BACK) return NAV.STAY;
 
     console.log(chalk.gray(`\nExporting ${downloadedChapters.length} ${t.units}...`));
 
@@ -432,50 +557,24 @@ async function exportNovel() {
     }
 
     await pressEnterToContinue();
+    return NAV.STAY;
 }
 
 /**
- * Source selection (called from settings)
+ * Dependencies screen
  */
-async function selectSource() {
-    const sources = await loadSources();
-
-    if (sources.length === 0) {
-        console.log(chalk.yellow('\nNo sources found.'));
-        console.log(chalk.gray('Add source configurations to the sources/ directory.'));
-        return;
-    }
-
-    const activeSource = getActiveSource();
-
-    const { selectedSource } = await inquirer.prompt([
-        {
-            type: 'list',
-            name: 'selectedSource',
-            message: 'Select source:',
-            choices: [
-                ...sources.map(s => ({
-                    name: `${s.name} ${activeSource?.id === s.id ? chalk.green('(current)') : ''}`,
-                    value: s.id
-                })),
-                new inquirer.Separator(),
-                { name: chalk.gray('← Cancel'), value: null }
-            ],
-            loop: false
-        }
-    ]);
-
-    if (selectedSource) {
-        await setActiveSource(selectedSource);
-        const source = sources.find(s => s.id === selectedSource);
-        console.log(chalk.green(`\nSource set to: ${source?.name}`));
-    }
+async function dependenciesScreen() {
+    await manageDependencies();
+    // Clear dependency cache so export menu shows updated status
+    depCache = { pandoc: null, latex: null, calibre: null };
+    await pressEnterToContinue();
+    return NAV.BACK;
 }
 
 /**
- * Settings menu
+ * Settings screen
  */
-async function showSettings() {
+async function settingsScreen() {
     console.clear();
     console.log(chalk.cyan('━━━ Settings ━━━\n'));
 
@@ -498,17 +597,16 @@ async function showSettings() {
                     value: 'detailedLogs'
                 },
                 new inquirer.Separator(),
-                { name: chalk.gray('← Back'), value: 'back' }
+                getBackChoice()
             ],
             loop: false
         }
     ]);
 
-    if (setting === 'back') return;
+    if (setting === NAV.BACK) return NAV.BACK;
 
     if (setting === 'source') {
-        await selectSource();
-        await pressEnterToContinue();
+        return 'selectSource';
     } else if (setting === 'detailedLogs') {
         const newValue = !settings.detailedLogs;
         await setSetting('detailedLogs', newValue);
@@ -516,35 +614,73 @@ async function showSettings() {
         console.log(chalk.green(`\nDetailed logs ${newValue ? 'enabled' : 'disabled'}.`));
         await pressEnterToContinue();
     }
+
+    return NAV.STAY;
 }
 
 /**
- * Create a simple ASCII progress bar
+ * Source selection screen
  */
-function createProgressBar(percentage, width = 20) {
-    const filled = Math.round((percentage / 100) * width);
-    const empty = width - filled;
-    const bar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
-    return `[${bar}] ${percentage}%`;
+async function selectSourceScreen() {
+    console.clear();
+    console.log(chalk.cyan('━━━ Select Source ━━━\n'));
+
+    const sources = await loadSources();
+
+    if (sources.length === 0) {
+        console.log(chalk.yellow('No sources found.'));
+        console.log(chalk.gray('Add source configurations to the sources/ directory.'));
+        await pressEnterToContinue();
+        return NAV.BACK;
+    }
+
+    const activeSource = getActiveSource();
+
+    const { selectedSource } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedSource',
+            message: 'Select source:',
+            choices: [
+                ...sources.map(s => ({
+                    name: `${s.name} ${activeSource?.id === s.id ? chalk.green('(current)') : ''}`,
+                    value: s.id
+                })),
+                new inquirer.Separator(),
+                getBackChoice()
+            ],
+            loop: false
+        }
+    ]);
+
+    if (selectedSource === NAV.BACK) return NAV.BACK;
+
+    await setActiveSource(selectedSource);
+    const source = sources.find(s => s.id === selectedSource);
+    console.log(chalk.green(`\nSource set to: ${source?.name}`));
+    await pressEnterToContinue();
+
+    return NAV.BACK;
 }
 
-/**
- * Wait for user to press enter
- */
-async function pressEnterToContinue() {
-    const readline = await import('readline');
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    return new Promise(resolve => {
-        rl.question(chalk.gray('\nPress Enter to continue...'), () => {
-            rl.close();
-            resolve();
-        });
-    });
-}
+// ============================================================================
+// Screen Registry
+// ============================================================================
 
-/**
- * Main application loop
- */
+const screens = {
+    main: mainMenuScreen,
+    download: downloadScreen,
+    downloads: downloadsScreen,
+    export: exportScreen,
+    dependencies: dependenciesScreen,
+    settings: settingsScreen,
+    selectSource: selectSourceScreen,
+};
+
+// ============================================================================
+// Main Application Loop
+// ============================================================================
+
 async function main() {
     log.info('Application started');
 
@@ -566,43 +702,44 @@ async function main() {
     // Ensure data directory exists
     await storage.ensureDataDir();
 
-    let running = true;
+    let currentScreen = 'main';
 
-    while (running) {
+    while (currentScreen) {
         try {
-            const action = await mainMenu();
+            const screenFn = screens[currentScreen];
 
-            switch (action) {
-                case 'download':
-                    await downloadNewNovel();
-                    break;
-                case 'downloads':
-                    await viewDownloads();
-                    break;
-                case 'export':
-                    await exportNovel();
-                    break;
-                case 'dependencies':
-                    await manageDependencies();
-                    // Clear dependency cache so export menu shows updated status
-                    depCache = { pandoc: null, latex: null, calibre: null };
-                    await pressEnterToContinue();
-                    break;
-                case 'settings':
-                    await showSettings();
-                    break;
-                case 'exit':
-                    running = false;
-                    break;
+            if (!screenFn) {
+                console.log(chalk.red(`Unknown screen: ${currentScreen}`));
+                currentScreen = 'main';
+                continue;
             }
+
+            // Track navigation (except for main menu)
+            if (currentScreen !== 'main') {
+                pushHistory(currentScreen);
+            }
+
+            // Run the screen
+            const result = await screenFn();
+
+            // Handle navigation
+            currentScreen = handleNavigation(result);
+
         } catch (error) {
             if (error.name === 'ExitPromptError') {
-                // User pressed Ctrl+C
-                running = false;
+                // User pressed Ctrl+C - go back or exit
+                const prev = popHistory();
+                if (prev) {
+                    currentScreen = prev.screen;
+                } else {
+                    currentScreen = null;
+                }
             } else {
                 console.log(chalk.red(`\nUnexpected error: ${error.message}`));
                 log.error('Unexpected error', { error: error.message, stack: error.stack });
                 await pressEnterToContinue();
+                currentScreen = 'main';
+                clearHistory();
             }
         }
     }
