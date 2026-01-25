@@ -14,16 +14,18 @@ import {
     exportToHtml, exportToTxt, exportToRtf, exportToAzw3, exportToMobi,
     listExports, checkPandoc, checkLatex, checkCalibre
 } from './exporter.js';
+
+// Cache for dependency checks (to avoid repeated checks)
+let depCache = { pandoc: null, latex: null, calibre: null };
 import * as storage from './storage.js';
 import { log, setDetailedLogs } from './logger.js';
 import { loadSettings, setSetting, getSettings } from './settings.js';
 import { manageDependencies } from './dependencies.js';
 import {
     loadSources,
-    getEnabledSources,
     getActiveSource,
     setActiveSource,
-    setSourceEnabled
+    getTerms
 } from './sourceManager.js';
 
 // ASCII Art Banner
@@ -47,17 +49,17 @@ async function mainMenu() {
     console.clear();
     console.log(getBanner());
 
+    const t = getTerms();
     const { action } = await inquirer.prompt([
         {
             type: 'list',
             name: 'action',
             message: 'What would you like to do?',
             choices: [
-                { name: 'Download New Novel', value: 'download' },
+                { name: `Download New ${t.Item}`, value: 'download' },
                 { name: 'View Downloads', value: 'downloads' },
-                { name: 'Export Novel', value: 'export' },
+                { name: `Export ${t.Item}`, value: 'export' },
                 new inquirer.Separator(),
-                { name: 'Sources', value: 'sources' },
                 { name: 'Dependencies', value: 'dependencies' },
                 { name: 'Settings', value: 'settings' },
                 { name: 'Exit', value: 'exit' }
@@ -73,13 +75,14 @@ async function mainMenu() {
  * Download new novel flow
  */
 async function downloadNewNovel() {
+    const t = getTerms();
     console.clear();
-    console.log(chalk.cyan('━━━ Download New Novel ━━━\n'));
+    console.log(chalk.cyan(`━━━ Download New ${t.Item} ━━━\n`));
 
     // Check if there's an active source
     const activeSource = getActiveSource();
     if (!activeSource) {
-        console.log(chalk.yellow('No source selected. Please select a source first.'));
+        console.log(chalk.yellow('No source selected. Please select a source in Settings.'));
         await pressEnterToContinue();
         return;
     }
@@ -91,7 +94,7 @@ async function downloadNewNovel() {
         {
             type: 'input',
             name: 'query',
-            message: 'Enter novel name to search:',
+            message: `Search for ${t.item}:`,
             validate: (input) => input.trim().length > 0 || 'Please enter a search term'
         }
     ]);
@@ -102,7 +105,7 @@ async function downloadNewNovel() {
         const results = await searchNovels(query.trim());
 
         if (results.length === 0) {
-            console.log(chalk.yellow('\nNo novels found. Try a different search term.'));
+            console.log(chalk.yellow(`\nNo ${t.items} found. Try a different search term.`));
             await pressEnterToContinue();
             return;
         }
@@ -112,9 +115,9 @@ async function downloadNewNovel() {
             {
                 type: 'list',
                 name: 'selectedNovel',
-                message: `Found ${results.length} novels. Select one to download:`,
+                message: `Found ${results.length} ${t.items}:`,
                 choices: [
-                    ...results.map((novel, idx) => ({
+                    ...results.map((novel) => ({
                         name: `${novel.title} ${chalk.gray(`by ${novel.author}`)}`,
                         value: novel
                     })),
@@ -128,20 +131,20 @@ async function downloadNewNovel() {
 
         if (!selectedNovel) return;
 
-        console.log(chalk.gray('\nFetching novel details...'));
+        console.log(chalk.gray(`\nFetching ${t.item} details...`));
 
         // Get full novel details
         const novelDetails = await getNovelDetails(selectedNovel.url);
 
         // Display novel info
-        console.log(chalk.cyan('\n━━━ Novel Details ━━━'));
-        console.log(chalk.white(`Title:    ${novelDetails.title}`));
-        console.log(chalk.white(`Author:   ${novelDetails.author}`));
-        console.log(chalk.white(`Status:   ${novelDetails.status}`));
-        console.log(chalk.white(`Chapters: ${novelDetails.totalChapters}`));
-        console.log(chalk.white(`Genres:   ${novelDetails.genres.join(', ')}`));
+        console.log(chalk.cyan(`\n━━━ ${t.Item} Details ━━━`));
+        console.log(chalk.white(`Title:       ${novelDetails.title}`));
+        console.log(chalk.white(`Author:      ${novelDetails.author}`));
+        console.log(chalk.white(`Status:      ${novelDetails.status}`));
+        console.log(chalk.white(`${t.Units}:   ${novelDetails.totalChapters}`));
+        console.log(chalk.white(`Genres:      ${novelDetails.genres.join(', ')}`));
         if (novelDetails.rating) {
-            console.log(chalk.white(`Rating:   ${novelDetails.rating}`));
+            console.log(chalk.white(`Rating:      ${novelDetails.rating}`));
         }
         if (novelDetails.description) {
             console.log(chalk.gray(`\n${novelDetails.description.substring(0, 300)}...`));
@@ -152,7 +155,7 @@ async function downloadNewNovel() {
             {
                 type: 'confirm',
                 name: 'confirm',
-                message: `Download ${novelDetails.totalChapters} chapters?`,
+                message: `Download ${novelDetails.totalChapters} ${t.units}?`,
                 default: true
             }
         ]);
@@ -164,18 +167,18 @@ async function downloadNewNovel() {
 
         // Display results
         console.log(chalk.cyan('\n━━━ Download Complete ━━━'));
-        console.log(chalk.green(`✓ Downloaded: ${result.downloaded} chapters`));
+        console.log(chalk.green(`✓ Downloaded: ${result.downloaded} ${t.units}`));
         if (result.skipped > 0) {
             console.log(chalk.gray(`○ Skipped:    ${result.skipped} (already downloaded)`));
         }
         if (result.failed > 0) {
-            console.log(chalk.red(`✗ Failed:     ${result.failed} chapters`));
+            console.log(chalk.red(`✗ Failed:     ${result.failed} ${t.units}`));
 
             const { retry } = await inquirer.prompt([
                 {
                     type: 'confirm',
                     name: 'retry',
-                    message: 'Would you like to retry failed chapters?',
+                    message: `Retry failed ${t.units}?`,
                     default: true
                 }
             ]);
@@ -197,13 +200,14 @@ async function downloadNewNovel() {
  * View downloads
  */
 async function viewDownloads() {
+    const t = getTerms();
     console.clear();
     console.log(chalk.cyan('━━━ Your Downloads ━━━\n'));
 
     const downloads = await storage.getAllDownloads();
 
     if (downloads.length === 0) {
-        console.log(chalk.gray('No novels downloaded yet.'));
+        console.log(chalk.gray(`No ${t.items} downloaded yet.`));
         await pressEnterToContinue();
         return;
     }
@@ -232,7 +236,7 @@ async function viewDownloads() {
         console.log(`  Progress: ${progressBar} ${status}`);
 
         if (prog?.failedChapters?.length > 0) {
-            console.log(chalk.red(`  Failed: ${prog.failedChapters.length} chapters`));
+            console.log(chalk.red(`  Failed: ${prog.failedChapters.length} ${t.units}`));
         }
         console.log();
     }
@@ -245,8 +249,8 @@ async function viewDownloads() {
             message: 'What would you like to do?',
             choices: [
                 { name: 'Resume incomplete download', value: 'resume' },
-                { name: 'Retry failed chapters', value: 'retry' },
-                { name: 'Delete a novel', value: 'delete' },
+                { name: `Retry failed ${t.units}`, value: 'retry' },
+                { name: `Delete a ${t.item}`, value: 'delete' },
                 new inquirer.Separator(),
                 { name: chalk.gray('← Back to menu'), value: 'back' }
             ],
@@ -261,7 +265,7 @@ async function viewDownloads() {
         {
             type: 'list',
             name: 'selectedNovel',
-            message: 'Select a novel:',
+            message: `Select a ${t.item}:`,
             choices: [
                 ...novelList.map(n => ({
                     name: n.title,
@@ -295,14 +299,14 @@ async function viewDownloads() {
             {
                 type: 'confirm',
                 name: 'confirm',
-                message: `Delete "${selectedNovel.title}" and all downloaded chapters?`,
+                message: `Delete "${selectedNovel.title}" and all downloaded ${t.units}?`,
                 default: false
             }
         ]);
 
         if (confirm) {
             await storage.deleteNovel(selectedNovel.title);
-            console.log(chalk.green('\nNovel deleted.'));
+            console.log(chalk.green(`\n${t.Item} deleted.`));
         }
     }
 
@@ -313,13 +317,14 @@ async function viewDownloads() {
  * Export novel flow
  */
 async function exportNovel() {
+    const t = getTerms();
     console.clear();
-    console.log(chalk.cyan('━━━ Export Novel ━━━\n'));
+    console.log(chalk.cyan(`━━━ Export ${t.Item} ━━━\n`));
 
     const downloads = await storage.getAllDownloads();
 
     if (downloads.length === 0) {
-        console.log(chalk.gray('No novels downloaded yet. Download a novel first.'));
+        console.log(chalk.gray(`No ${t.items} downloaded yet. Download a ${t.item} first.`));
         await pressEnterToContinue();
         return;
     }
@@ -339,12 +344,12 @@ async function exportNovel() {
         {
             type: 'list',
             name: 'selectedNovel',
-            message: 'Select a novel to export:',
+            message: `Select a ${t.item} to export:`,
             choices: [
                 ...downloads.map(n => {
                     const chapterCount = n.totalChapters || n.chapters?.length || '?';
                     return {
-                        name: `${n.title} ${chalk.gray(`(${chapterCount} chapters)`)}`,
+                        name: `${n.title} ${chalk.gray(`(${chapterCount} ${t.units})`)}`,
                         value: n
                     };
                 }),
@@ -360,10 +365,21 @@ async function exportNovel() {
     // Check if there are downloaded chapters
     const downloadedChapters = await storage.getDownloadedChapters(selectedNovel.title);
     if (downloadedChapters.length === 0) {
-        console.log(chalk.yellow('\nNo chapters downloaded for this novel yet.'));
+        console.log(chalk.yellow(`\nNo ${t.units} downloaded for this ${t.item} yet.`));
         await pressEnterToContinue();
         return;
     }
+
+    // Check dependencies for format indicators
+    if (depCache.latex === null) {
+        depCache.latex = await checkLatex();
+    }
+    if (depCache.calibre === null) {
+        depCache.calibre = await checkCalibre();
+    }
+
+    const latexStatus = depCache.latex ? '' : chalk.yellow(' [needs LaTeX]');
+    const calibreStatus = depCache.calibre ? '' : chalk.yellow(' [needs Calibre]');
 
     // Select export format
     const { format } = await inquirer.prompt([
@@ -373,17 +389,17 @@ async function exportNovel() {
             message: 'Select export format:',
             choices: [
                 new inquirer.Separator('─── E-Book Formats ───'),
-                { name: '📖  EPUB (e-readers, most devices)', value: 'epub' },
-                { name: '📱  AZW3 (Kindle modern)', value: 'azw3' },
-                { name: '📱  MOBI (Kindle legacy)', value: 'mobi' },
+                { name: '    EPUB (e-readers, most devices)', value: 'epub' },
+                { name: `    AZW3 (Kindle modern)${calibreStatus}`, value: 'azw3' },
+                { name: `    MOBI (Kindle legacy)${calibreStatus}`, value: 'mobi' },
                 new inquirer.Separator('─── Document Formats ───'),
-                { name: '📄  PDF (print, desktop reading)', value: 'pdf' },
-                { name: '📝  DOCX (Microsoft Word)', value: 'docx' },
-                { name: '📝  ODT (LibreOffice/OpenDocument)', value: 'odt' },
-                { name: '📝  RTF (Rich Text Format)', value: 'rtf' },
+                { name: `    PDF (print, desktop reading)${latexStatus}`, value: 'pdf' },
+                { name: '    DOCX (Microsoft Word)', value: 'docx' },
+                { name: '    ODT (LibreOffice/OpenDocument)', value: 'odt' },
+                { name: '    RTF (Rich Text Format)', value: 'rtf' },
                 new inquirer.Separator('─── Other Formats ───'),
-                { name: '🌐  HTML (web page)', value: 'html' },
-                { name: '📃  TXT (plain text)', value: 'txt' },
+                { name: '    HTML (web page)', value: 'html' },
+                { name: '    TXT (plain text)', value: 'txt' },
                 new inquirer.Separator(),
                 { name: chalk.gray('← Cancel'), value: null }
             ],
@@ -394,7 +410,7 @@ async function exportNovel() {
 
     if (!format) return;
 
-    console.log(chalk.gray(`\nExporting ${downloadedChapters.length} chapters...`));
+    console.log(chalk.gray(`\nExporting ${downloadedChapters.length} ${t.units}...`));
 
     try {
         const exportFunctions = {
@@ -419,112 +435,41 @@ async function exportNovel() {
 }
 
 /**
- * Sources management menu
+ * Source selection (called from settings)
  */
-async function manageSources() {
-    console.clear();
-    console.log(chalk.cyan('━━━ Sources ━━━\n'));
-
+async function selectSource() {
     const sources = await loadSources();
 
     if (sources.length === 0) {
-        console.log(chalk.yellow('No sources found.'));
+        console.log(chalk.yellow('\nNo sources found.'));
         console.log(chalk.gray('Add source configurations to the sources/ directory.'));
-        await pressEnterToContinue();
         return;
     }
 
     const activeSource = getActiveSource();
 
-    // Display sources
-    console.log(chalk.white('Available sources:\n'));
-    for (const source of sources) {
-        const isActive = activeSource?.id === source.id;
-        const status = source.enabled
-            ? (isActive ? chalk.green('● Active') : chalk.blue('○ Enabled'))
-            : chalk.gray('○ Disabled');
-
-        console.log(`  ${status}  ${chalk.white.bold(source.name)}`);
-        console.log(chalk.gray(`        ${source.baseUrl}`));
-        console.log(chalk.gray(`        Version: ${source.version || '1.0.0'}`));
-        console.log();
-    }
-
-    // Options menu
-    const { action } = await inquirer.prompt([
+    const { selectedSource } = await inquirer.prompt([
         {
             type: 'list',
-            name: 'action',
-            message: 'What would you like to do?',
+            name: 'selectedSource',
+            message: 'Select source:',
             choices: [
-                { name: 'Select active source', value: 'select' },
-                { name: 'Enable/Disable source', value: 'toggle' },
+                ...sources.map(s => ({
+                    name: `${s.name} ${activeSource?.id === s.id ? chalk.green('(current)') : ''}`,
+                    value: s.id
+                })),
                 new inquirer.Separator(),
-                { name: chalk.gray('← Back to menu'), value: 'back' }
+                { name: chalk.gray('← Cancel'), value: null }
             ],
             loop: false
         }
     ]);
 
-    if (action === 'back') return;
-
-    if (action === 'select') {
-        const enabledSources = await getEnabledSources();
-
-        if (enabledSources.length === 0) {
-            console.log(chalk.yellow('\nNo enabled sources. Enable a source first.'));
-            await pressEnterToContinue();
-            return;
-        }
-
-        const { selectedSource } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'selectedSource',
-                message: 'Select active source:',
-                choices: [
-                    ...enabledSources.map(s => ({
-                        name: `${s.name} ${activeSource?.id === s.id ? chalk.green('(current)') : ''}`,
-                        value: s.id
-                    })),
-                    new inquirer.Separator(),
-                    { name: chalk.gray('← Cancel'), value: null }
-                ],
-                loop: false
-            }
-        ]);
-
-        if (selectedSource) {
-            await setActiveSource(selectedSource);
-            console.log(chalk.green(`\nActive source set to: ${selectedSource}`));
-        }
-
-    } else if (action === 'toggle') {
-        const { selectedSource } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'selectedSource',
-                message: 'Select source to enable/disable:',
-                choices: [
-                    ...sources.map(s => ({
-                        name: `${s.name} ${s.enabled ? chalk.green('[enabled]') : chalk.gray('[disabled]')}`,
-                        value: s
-                    })),
-                    new inquirer.Separator(),
-                    { name: chalk.gray('← Cancel'), value: null }
-                ],
-                loop: false
-            }
-        ]);
-
-        if (selectedSource) {
-            const newState = !selectedSource.enabled;
-            await setSourceEnabled(selectedSource.id, newState);
-            console.log(chalk.green(`\nSource "${selectedSource.name}" ${newState ? 'enabled' : 'disabled'}.`));
-        }
+    if (selectedSource) {
+        await setActiveSource(selectedSource);
+        const source = sources.find(s => s.id === selectedSource);
+        console.log(chalk.green(`\nSource set to: ${source?.name}`));
     }
-
-    await pressEnterToContinue();
 }
 
 /**
@@ -535,6 +480,8 @@ async function showSettings() {
     console.log(chalk.cyan('━━━ Settings ━━━\n'));
 
     const settings = getSettings();
+    const activeSource = getActiveSource();
+    const sourceName = activeSource ? activeSource.name : chalk.yellow('None');
 
     const { setting } = await inquirer.prompt([
         {
@@ -542,6 +489,10 @@ async function showSettings() {
             name: 'setting',
             message: 'Configure settings:',
             choices: [
+                {
+                    name: `Source: ${chalk.cyan(sourceName)}`,
+                    value: 'source'
+                },
                 {
                     name: `Detailed Logs: ${settings.detailedLogs ? chalk.green('ON') : chalk.gray('OFF')}`,
                     value: 'detailedLogs'
@@ -555,7 +506,10 @@ async function showSettings() {
 
     if (setting === 'back') return;
 
-    if (setting === 'detailedLogs') {
+    if (setting === 'source') {
+        await selectSource();
+        await pressEnterToContinue();
+    } else if (setting === 'detailedLogs') {
         const newValue = !settings.detailedLogs;
         await setSetting('detailedLogs', newValue);
         setDetailedLogs(newValue);
@@ -628,11 +582,10 @@ async function main() {
                 case 'export':
                     await exportNovel();
                     break;
-                case 'sources':
-                    await manageSources();
-                    break;
                 case 'dependencies':
                     await manageDependencies();
+                    // Clear dependency cache so export menu shows updated status
+                    depCache = { pandoc: null, latex: null, calibre: null };
                     await pressEnterToContinue();
                     break;
                 case 'settings':

@@ -294,14 +294,19 @@ export async function exportToEpub(novelName) {
 }
 
 /**
- * Export novel to PDF format using Pandoc
+ * Export novel to PDF format using Pandoc + LaTeX
  */
 export async function exportToPdf(novelName) {
     await ensureExportDir();
 
     // Check pandoc
     if (!await checkPandoc()) {
-        throw new Error('Pandoc is not installed. Please install it from https://pandoc.org/installing.html');
+        throw new Error('Pandoc is not installed. Run "Dependencies" from main menu to install.');
+    }
+
+    // Check LaTeX
+    if (!await checkLatex()) {
+        throw new Error('LaTeX (MiKTeX) is not installed. Run "Dependencies" from main menu to install, or use EPUB/DOCX export instead.');
     }
 
     const novel = await storage.getNovel(storage.sanitizeName(novelName));
@@ -336,21 +341,26 @@ export async function exportToPdf(novelName) {
 
     await fs.writeFile(mdPath, markdown, 'utf-8');
 
-    updateLine(chalk.gray('Running pandoc...'));
+    updateLine(chalk.gray('Running pandoc with LaTeX...'));
 
-    // Create a LaTeX header file for CJK support
-    const latexHeader = `\\usepackage{xeCJK}
-\\setCJKmainfont{Microsoft YaHei}
-\\setCJKsansfont{Microsoft YaHei}
-\\setCJKmonofont{Microsoft YaHei}
+    // Create a LaTeX header file for better formatting and CJK support
+    const latexHeader = `% Better chapter formatting
+\\usepackage{titlesec}
+\\titleformat{\\chapter}[display]{\\normalfont\\huge\\bfseries}{\\chaptertitlename\\ \\thechapter}{20pt}{\\Huge}
+
+% CJK support (if available)
+\\IfFontExistsTF{Microsoft YaHei}{
+  \\usepackage{xeCJK}
+  \\setCJKmainfont{Microsoft YaHei}
+  \\setCJKsansfont{Microsoft YaHei}
+  \\setCJKmonofont{Microsoft YaHei}
+}{}
 `;
     const headerPath = path.join(TEMP_DIR, `${safeName}_header.tex`);
     await fs.writeFile(headerPath, latexHeader, 'utf-8');
 
     try {
-        // PDF generation with pandoc using XeLaTeX for proper Unicode/CJK support
-        // Note: Requires MiKTeX or TeX Live with xelatex installed
-
+        // PDF generation with pandoc using XeLaTeX for proper Unicode support
         const cmd = [
             `pandoc "${mdPath}" -o "${outputPath}"`,
             '--toc --toc-depth=1',
@@ -369,10 +379,8 @@ export async function exportToPdf(novelName) {
 
         await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 }); // 50MB buffer for large novels
 
-        // Cleanup header file
+        // Cleanup temp files
         await fs.unlink(headerPath).catch(() => {});
-
-        // Cleanup temp file
         await fs.unlink(mdPath).catch(() => {});
 
         updateLine('');
@@ -392,14 +400,19 @@ export async function exportToPdf(novelName) {
         updateLine('');
         console.log();
 
-        // Check if it's a LaTeX engine issue
-        if (err.message.includes('xelatex') || err.message.includes('pdflatex') || err.message.includes('xeCJK')) {
+        // Check if it's a LaTeX package issue
+        if (err.message.includes('xelatex') || err.message.includes('pdflatex')) {
             log.export.failed(novel.title, 'PDF', err);
-            throw new Error('PDF generation requires LaTeX with CJK support. Install MiKTeX and let it auto-install packages, or use EPUB export instead.');
+            throw new Error('LaTeX engine error. Make sure MiKTeX is properly installed and run MiKTeX Console to enable auto-install of missing packages.');
+        }
+
+        if (err.message.includes('Package') || err.message.includes('.sty')) {
+            log.export.failed(novel.title, 'PDF', err);
+            throw new Error('Missing LaTeX packages. Open MiKTeX Console, go to Settings, and set "Install missing packages on-the-fly" to "Yes".');
         }
 
         log.export.failed(novel.title, 'PDF', err);
-        throw new Error(`Pandoc failed: ${err.message}`);
+        throw new Error(`PDF export failed: ${err.message}`);
     }
 }
 

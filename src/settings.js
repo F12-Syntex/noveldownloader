@@ -11,6 +11,7 @@ const SETTINGS_FILE = 'settings.json';
 const DEFAULT_SETTINGS = {
     detailedLogs: false,
     delayBetweenChapters: 400,
+    activeSourceId: null,
 };
 
 let currentSettings = { ...DEFAULT_SETTINGS };

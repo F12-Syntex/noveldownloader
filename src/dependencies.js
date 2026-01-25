@@ -25,13 +25,18 @@ const DEPENDENCIES = {
     },
     latex: {
         name: 'MiKTeX (LaTeX)',
-        description: 'LaTeX distribution for PDF generation with CJK support',
+        description: 'LaTeX distribution for high-quality PDF generation',
         required: false,
         checkCmd: 'xelatex --version',
         wingetId: 'MiKTeX.MiKTeX',
         downloadUrl: 'https://miktex.org/download',
         formats: ['PDF'],
-        postInstall: 'After installation, run MiKTeX Console and set "Install missing packages on-the-fly" to "Yes"'
+        postInstall: `IMPORTANT: After installation:
+  1. Open "MiKTeX Console" from Start Menu
+  2. Go to Settings tab
+  3. Set "Install missing packages on-the-fly" to "Yes"
+  4. Click "Check for updates" to ensure packages are up-to-date
+  This allows MiKTeX to automatically download required LaTeX packages.`
     },
     calibre: {
         name: 'Calibre',

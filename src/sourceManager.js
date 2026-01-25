@@ -7,6 +7,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { log } from './logger.js';
+import { getSetting, setSetting } from './settings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,11 +57,22 @@ export async function loadSources() {
         sourcesCache = sources;
         log.info(`Loaded ${sources.length} source(s)`);
 
+        // Load active source from settings
+        const savedSourceId = getSetting('activeSourceId');
+        if (savedSourceId && !activeSource) {
+            const savedSource = sources.find(s => s.id === savedSourceId && s.enabled);
+            if (savedSource) {
+                activeSource = savedSource;
+            }
+        }
+
         // Set default active source if none set
         if (!activeSource && sources.length > 0) {
             const enabledSources = sources.filter(s => s.enabled);
             if (enabledSources.length > 0) {
                 activeSource = enabledSources[0];
+                // Save to settings
+                await setSetting('activeSourceId', activeSource.id);
             }
         }
 
@@ -100,10 +112,9 @@ export function getActiveSource() {
 export async function setActiveSource(sourceId) {
     const source = await getSourceById(sourceId);
     if (source) {
-        if (!source.enabled) {
-            throw new Error(`Source "${source.name}" is disabled`);
-        }
         activeSource = source;
+        // Save to settings
+        await setSetting('activeSourceId', sourceId);
         log.info(`Active source set to: ${source.name}`);
         return source;
     }
@@ -200,4 +211,67 @@ export function ensureAbsoluteUrl(url, baseUrl) {
  */
 export function getSourcesDirectory() {
     return SOURCES_DIR;
+}
+
+/**
+ * Get terminology based on content type
+ * Returns appropriate terms for the active source's content type
+ */
+export function getTerms() {
+    const contentType = activeSource?.contentType || 'novel';
+
+    const terms = {
+        novel: {
+            item: 'novel',
+            Item: 'Novel',
+            items: 'novels',
+            Items: 'Novels',
+            unit: 'chapter',
+            Unit: 'Chapter',
+            units: 'chapters',
+            Units: 'Chapters',
+        },
+        lightnovel: {
+            item: 'light novel',
+            Item: 'Light Novel',
+            items: 'light novels',
+            Items: 'Light Novels',
+            unit: 'chapter',
+            Unit: 'Chapter',
+            units: 'chapters',
+            Units: 'Chapters',
+        },
+        manga: {
+            item: 'manga',
+            Item: 'Manga',
+            items: 'manga',
+            Items: 'Manga',
+            unit: 'chapter',
+            Unit: 'Chapter',
+            units: 'chapters',
+            Units: 'Chapters',
+        },
+        webtoon: {
+            item: 'webtoon',
+            Item: 'Webtoon',
+            items: 'webtoons',
+            Items: 'Webtoons',
+            unit: 'episode',
+            Unit: 'Episode',
+            units: 'episodes',
+            Units: 'Episodes',
+        },
+        fanfiction: {
+            item: 'fanfic',
+            Item: 'Fanfic',
+            items: 'fanfics',
+            Items: 'Fanfics',
+            unit: 'chapter',
+            Unit: 'Chapter',
+            units: 'chapters',
+            Units: 'Chapters',
+        },
+    };
+
+    return terms[contentType] || terms.novel;
 }

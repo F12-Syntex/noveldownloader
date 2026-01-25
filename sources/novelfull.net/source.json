@@ -4,6 +4,7 @@
     "baseUrl": "https://novelfull.net",
     "enabled": true,
     "version": "1.0.0",
+    "contentType": "novel",
     "http": {
         "timeout": 15000,
         "retryAttempts": 3,
