@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * HTML Structure Extractor
+ * HTML Structure Extractor (Puppeteer version)
  *
  * A standalone tool to analyze website HTML structure for creating source configs.
- * Outputs a condensed, simplified schema showing CSS selector paths.
+ * Uses Puppeteer headless browser to bypass anti-bot protections.
  *
- * Usage: node extract.js <url1> [url2] [url3] ...
- * Output: html-output/<domain>/page-<index>.html
+ * Usage: node extract.js [url1] [url2] ...
+ *        node extract.js  (interactive mode - paste URLs)
+ *
+ * Output: html-output/<domain>/page.html
  */
 
-import fetch from 'node-fetch';
+import puppeteer from 'puppeteer';
 import * as cheerio from 'cheerio';
 import fs from 'fs/promises';
 import path from 'path';
@@ -21,53 +23,106 @@ import { URL } from 'url';
 // ============================================================================
 
 const CONFIG = {
-    // Tags to completely remove (scripts, styles, etc.)
+    // Tags to completely remove
     removeTags: [
         'script', 'style', 'noscript', 'iframe', 'svg', 'path',
-        'meta', 'link', 'head', 'comment', 'br', 'hr'
+        'meta', 'link', 'head', 'br', 'hr', 'input', 'button', 'form'
     ],
-    // Attributes to keep (others are stripped)
+    // Attributes to keep
     keepAttrs: ['id', 'class', 'href', 'src', 'data-id', 'data-url', 'data-page', 'title', 'alt'],
     // Max text length before truncating
     maxTextLength: 80,
     // Max children to show before collapsing
     maxChildren: 15,
     // Tags that usually contain useful data
-    dataTags: ['a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'li', 'td', 'th', 'img'],
-    // User agent for requests
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    dataTags: ['a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'li', 'td', 'th', 'img', 'div'],
+    // Puppeteer settings
+    browser: {
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--window-size=1920,1080'
+        ]
+    },
+    // Page settings
+    page: {
+        timeout: 30000,
+        waitUntil: 'networkidle2',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
 };
 
 // ============================================================================
-// HTML Fetching
+// Puppeteer Browser Management
 // ============================================================================
+
+let browser = null;
+
+async function getBrowser() {
+    if (!browser) {
+        console.log('  Launching browser...');
+        browser = await puppeteer.launch(CONFIG.browser);
+    }
+    return browser;
+}
+
+async function closeBrowser() {
+    if (browser) {
+        await browser.close();
+        browser = null;
+    }
+}
 
 async function fetchPage(url) {
     console.log(`  Fetching: ${url}`);
 
-    const response = await fetch(url, {
-        headers: {
-            'User-Agent': CONFIG.userAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-        },
-        timeout: 30000
-    });
+    const browser = await getBrowser();
+    const page = await browser.newPage();
 
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    try {
+        // Set user agent
+        await page.setUserAgent(CONFIG.page.userAgent);
+
+        // Set viewport
+        await page.setViewport({ width: 1920, height: 1080 });
+
+        // Block unnecessary resources to speed up loading
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resourceType = req.resourceType();
+            if (['image', 'font', 'media'].includes(resourceType)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+
+        // Navigate to page
+        await page.goto(url, {
+            waitUntil: CONFIG.page.waitUntil,
+            timeout: CONFIG.page.timeout
+        });
+
+        // Wait a bit for dynamic content
+        await new Promise(r => setTimeout(r, 1500));
+
+        // Get the full HTML
+        const html = await page.content();
+
+        return html;
+    } finally {
+        await page.close();
     }
-
-    return await response.text();
 }
 
 // ============================================================================
 // HTML Processing
 // ============================================================================
 
-/**
- * Clean and simplify HTML structure
- */
 function processHtml(html, url) {
     const $ = cheerio.load(html);
 
@@ -78,6 +133,9 @@ function processHtml(html, url) {
     $('*').contents().filter(function() {
         return this.type === 'comment';
     }).remove();
+
+    // Remove hidden elements
+    $('[style*="display: none"], [style*="display:none"], .hidden, [hidden]').remove();
 
     // Process the body
     const body = $('body');
@@ -90,7 +148,7 @@ function processHtml(html, url) {
 }
 
 /**
- * Recursively analyze DOM structure and build condensed representation
+ * Recursively analyze DOM structure
  */
 function analyzeStructure($, element, parentPath, depth) {
     const results = [];
@@ -101,20 +159,16 @@ function analyzeStructure($, element, parentPath, depth) {
 
         if (!tagName || CONFIG.removeTags.includes(tagName)) return;
 
-        // Build selector for this element
         const selector = buildSelector($child, tagName);
         const currentPath = parentPath ? `${parentPath} > ${selector}` : selector;
 
-        // Get text content (direct text only, not from children)
         const directText = getDirectText($child).trim();
         const truncatedText = directText.length > CONFIG.maxTextLength
             ? directText.substring(0, CONFIG.maxTextLength) + '...'
             : directText;
 
-        // Count children
         const childCount = $child.children().length;
 
-        // Build node info
         const nodeInfo = {
             tag: tagName,
             selector: selector,
@@ -124,17 +178,14 @@ function analyzeStructure($, element, parentPath, depth) {
             depth
         };
 
-        // Determine if this is a potential data node
         if (CONFIG.dataTags.includes(tagName) && (directText || tagName === 'a' || tagName === 'img')) {
             nodeInfo.isData = true;
 
-            // Add href for links
             if (tagName === 'a') {
                 const href = $child.attr('href');
                 if (href) nodeInfo.href = href.substring(0, 100);
             }
 
-            // Add src for images
             if (tagName === 'img') {
                 const src = $child.attr('src');
                 if (src) nodeInfo.src = src.substring(0, 100);
@@ -143,11 +194,9 @@ function analyzeStructure($, element, parentPath, depth) {
 
         results.push(nodeInfo);
 
-        // Recurse into children (with depth limit)
         if (childCount > 0 && depth < 10) {
             const childResults = analyzeStructure($, $child, currentPath, depth + 1);
 
-            // Collapse if too many children of same type
             if (childResults.length > CONFIG.maxChildren) {
                 const collapsed = collapseRepeating(childResults);
                 results.push(...collapsed);
@@ -160,9 +209,6 @@ function analyzeStructure($, element, parentPath, depth) {
     return results;
 }
 
-/**
- * Build a CSS selector for an element
- */
 function buildSelector($el, tagName) {
     const id = $el.attr('id');
     const classes = $el.attr('class');
@@ -170,13 +216,11 @@ function buildSelector($el, tagName) {
     let selector = tagName;
 
     if (id) {
-        // Clean ID (remove dynamic parts)
         const cleanId = id.replace(/\d+/g, '*');
         selector += `#${cleanId}`;
     } else if (classes) {
-        // Get first 2 meaningful classes
         const classArr = classes.split(/\s+/)
-            .filter(c => c && !c.match(/^(js-|is-|has-|active|hidden|show|visible)/))
+            .filter(c => c && !c.match(/^(js-|is-|has-|active|hidden|show|visible|col-|row|container)/))
             .slice(0, 2);
         if (classArr.length) {
             selector += '.' + classArr.join('.');
@@ -186,9 +230,6 @@ function buildSelector($el, tagName) {
     return selector;
 }
 
-/**
- * Get direct text content (not from children)
- */
 function getDirectText($el) {
     return $el.contents()
         .filter(function() {
@@ -199,9 +240,6 @@ function getDirectText($el) {
         .trim();
 }
 
-/**
- * Collapse repeating similar elements
- */
 function collapseRepeating(nodes) {
     const groups = {};
 
@@ -220,22 +258,19 @@ function collapseRepeating(nodes) {
     }));
 }
 
-/**
- * Find likely data selectors (lists, repeated patterns)
- */
 function findDataSelectors($, body) {
     const selectors = {
         lists: [],
         links: [],
         headings: [],
         images: [],
-        forms: []
+        textBlocks: []
     };
 
     // Find list-like structures
     $('ul, ol, .list, [class*="list"]').each((i, el) => {
         const $el = $(el);
-        const itemCount = $el.children('li, .item, [class*="item"]').length;
+        const itemCount = $el.children('li, .item, [class*="item"], a').length;
         if (itemCount >= 3) {
             selectors.lists.push({
                 container: getFullSelector($el),
@@ -245,7 +280,7 @@ function findDataSelectors($, body) {
         }
     });
 
-    // Find grouped links (navigation, chapter lists, etc.)
+    // Find grouped links
     const linkGroups = {};
     $('a[href]').each((i, el) => {
         const $el = $(el);
@@ -261,7 +296,6 @@ function findDataSelectors($, body) {
         });
     });
 
-    // Keep only groups with 3+ links
     Object.entries(linkGroups).forEach(([selector, links]) => {
         if (links.length >= 3) {
             selectors.links.push({
@@ -273,20 +307,23 @@ function findDataSelectors($, body) {
     });
 
     // Find headings
-    $('h1, h2, h3').each((i, el) => {
+    $('h1, h2, h3, h4').each((i, el) => {
         const $el = $(el);
-        selectors.headings.push({
-            tag: el.tagName.toLowerCase(),
-            selector: getFullSelector($el),
-            text: $el.text().trim().substring(0, 80)
-        });
+        const text = $el.text().trim();
+        if (text) {
+            selectors.headings.push({
+                tag: el.tagName.toLowerCase(),
+                selector: getFullSelector($el),
+                text: text.substring(0, 80)
+            });
+        }
     });
 
     // Find main images
     $('img[src]').each((i, el) => {
         const $el = $(el);
-        const src = $el.attr('src');
-        if (src && !src.includes('icon') && !src.includes('logo') && !src.includes('avatar')) {
+        const src = $el.attr('src') || '';
+        if (src && !src.includes('icon') && !src.includes('logo') && !src.includes('avatar') && !src.includes('data:')) {
             selectors.images.push({
                 selector: getFullSelector($el),
                 src: src.substring(0, 100),
@@ -295,12 +332,21 @@ function findDataSelectors($, body) {
         }
     });
 
+    // Find text blocks (paragraphs with content)
+    $('p, .content, .text, [class*="content"], [class*="chapter"]').each((i, el) => {
+        const $el = $(el);
+        const text = $el.text().trim();
+        if (text.length > 100) {
+            selectors.textBlocks.push({
+                selector: getFullSelector($el),
+                preview: text.substring(0, 100) + '...'
+            });
+        }
+    });
+
     return selectors;
 }
 
-/**
- * Get a full CSS selector for an element
- */
 function getFullSelector($el) {
     const parts = [];
     let current = $el;
@@ -317,7 +363,7 @@ function getFullSelector($el) {
             part += `#${id.replace(/\d+/g, '*')}`;
         } else if (classes) {
             const mainClass = classes.split(/\s+/)
-                .filter(c => c && c.length < 30 && !c.match(/^(js-|is-|has-)/))
+                .filter(c => c && c.length < 30 && !c.match(/^(js-|is-|has-|col-|row)/))
                 .slice(0, 1)[0];
             if (mainClass) part += `.${mainClass}`;
         }
@@ -325,7 +371,6 @@ function getFullSelector($el) {
         parts.unshift(part);
         current = current.parent();
 
-        // Stop if we hit an ID (unique enough)
         if (id) break;
     }
 
@@ -336,9 +381,6 @@ function getFullSelector($el) {
 // Output Generation
 // ============================================================================
 
-/**
- * Generate condensed HTML output
- */
 function generateOutput(url, structure, selectors) {
     const lines = [];
 
@@ -350,38 +392,46 @@ function generateOutput(url, structure, selectors) {
     lines.push('  <style>');
     lines.push('    body { font-family: monospace; font-size: 12px; background: #1e1e1e; color: #d4d4d4; padding: 20px; }');
     lines.push('    .section { margin: 20px 0; padding: 15px; background: #252526; border-radius: 4px; }');
-    lines.push('    .section-title { color: #569cd6; font-size: 14px; margin-bottom: 10px; }');
-    lines.push('    .path { color: #9cdcfe; }');
+    lines.push('    .section-title { color: #569cd6; font-size: 14px; margin-bottom: 10px; font-weight: bold; }');
+    lines.push('    .path { color: #9cdcfe; cursor: pointer; }');
+    lines.push('    .path:hover { background: #264f78; }');
     lines.push('    .tag { color: #4ec9b0; }');
     lines.push('    .text { color: #ce9178; }');
     lines.push('    .data { background: #264f78; padding: 2px 5px; border-radius: 2px; }');
     lines.push('    .count { color: #b5cea8; }');
-    lines.push('    .href { color: #6a9955; }');
+    lines.push('    .href { color: #6a9955; font-size: 11px; }');
     lines.push('    .indent { margin-left: 20px; }');
-    lines.push('    .node { margin: 3px 0; padding: 2px 0; border-left: 1px solid #3c3c3c; padding-left: 10px; }');
-    lines.push('    .selector-box { background: #1e1e1e; padding: 10px; margin: 5px 0; border-radius: 4px; }');
-    lines.push('    .copy-btn { cursor: pointer; background: #0e639c; color: white; border: none; padding: 2px 8px; border-radius: 2px; font-size: 11px; }');
+    lines.push('    .selector-box { background: #1e1e1e; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 3px solid #569cd6; }');
     lines.push('    pre { margin: 0; white-space: pre-wrap; word-break: break-all; }');
+    lines.push('    .copy-hint { color: #6a9955; font-size: 10px; }');
+    lines.push('    h3 { color: #c586c0; margin: 15px 0 10px 0; }');
     lines.push('  </style>');
+    lines.push('  <script>');
+    lines.push('    function copyText(el) {');
+    lines.push('      const text = el.innerText;');
+    lines.push('      navigator.clipboard.writeText(text);');
+    lines.push('      el.style.background = "#4ec9b0";');
+    lines.push('      setTimeout(() => el.style.background = "", 200);');
+    lines.push('    }');
+    lines.push('  </script>');
     lines.push('</head>');
     lines.push('<body>');
 
-    // URL info
-    lines.push(`<h2 style="color:#dcdcaa">Source URL: <span style="color:#ce9178">${escapeHtml(url)}</span></h2>`);
-    lines.push(`<p style="color:#6a9955">Generated: ${new Date().toISOString()}</p>`);
+    lines.push(`<h2 style="color:#dcdcaa">Source: <span style="color:#ce9178">${escapeHtml(url)}</span></h2>`);
+    lines.push(`<p class="copy-hint">Click any selector to copy it</p>`);
 
     // Likely data selectors section
     lines.push('<div class="section">');
-    lines.push('  <div class="section-title">== LIKELY DATA SELECTORS ==</div>');
+    lines.push('  <div class="section-title">LIKELY DATA SELECTORS</div>');
 
-    // Link groups (most useful for novel sources)
+    // Link groups
     if (selectors.links.length > 0) {
-        lines.push('  <h3 style="color:#c586c0">Link Groups (chapters, navigation):</h3>');
+        lines.push('  <h3>Link Groups (chapters, navigation):</h3>');
         selectors.links.slice(0, 10).forEach(group => {
             lines.push('  <div class="selector-box">');
-            lines.push(`    <div><span class="path">${escapeHtml(group.container)}</span> <span class="count">[${group.count} links]</span></div>`);
+            lines.push(`    <div><span class="path" onclick="copyText(this)">${escapeHtml(group.container)}</span> <span class="count">[${group.count} links]</span></div>`);
             group.samples.forEach(s => {
-                lines.push(`    <div class="indent">- <span class="text">"${escapeHtml(s.text)}"</span> <span class="href">${escapeHtml(s.href || '')}</span></div>`);
+                lines.push(`    <div class="indent">→ <span class="text">"${escapeHtml(s.text)}"</span> <span class="href">${escapeHtml(s.href || '')}</span></div>`);
             });
             lines.push('  </div>');
         });
@@ -389,74 +439,80 @@ function generateOutput(url, structure, selectors) {
 
     // Headings
     if (selectors.headings.length > 0) {
-        lines.push('  <h3 style="color:#c586c0">Headings (title, chapter names):</h3>');
-        selectors.headings.slice(0, 5).forEach(h => {
+        lines.push('  <h3>Headings (titles):</h3>');
+        selectors.headings.slice(0, 8).forEach(h => {
             lines.push('  <div class="selector-box">');
-            lines.push(`    <div><span class="tag">${h.tag}</span> <span class="path">${escapeHtml(h.selector)}</span></div>`);
+            lines.push(`    <div><span class="tag">&lt;${h.tag}&gt;</span> <span class="path" onclick="copyText(this)">${escapeHtml(h.selector)}</span></div>`);
             lines.push(`    <div class="indent text">"${escapeHtml(h.text)}"</div>`);
+            lines.push('  </div>');
+        });
+    }
+
+    // Text blocks
+    if (selectors.textBlocks.length > 0) {
+        lines.push('  <h3>Text Blocks (content):</h3>');
+        selectors.textBlocks.slice(0, 5).forEach(block => {
+            lines.push('  <div class="selector-box">');
+            lines.push(`    <div><span class="path" onclick="copyText(this)">${escapeHtml(block.selector)}</span></div>`);
+            lines.push(`    <div class="indent text">"${escapeHtml(block.preview)}"</div>`);
             lines.push('  </div>');
         });
     }
 
     // Lists
     if (selectors.lists.length > 0) {
-        lines.push('  <h3 style="color:#c586c0">List Structures:</h3>');
+        lines.push('  <h3>List Structures:</h3>');
         selectors.lists.slice(0, 5).forEach(list => {
             lines.push('  <div class="selector-box">');
-            lines.push(`    <div><span class="path">${escapeHtml(list.container)}</span> <span class="count">[${list.itemCount} items]</span></div>`);
-            if (list.sample) {
-                lines.push(`    <div class="indent text">Sample: "${escapeHtml(list.sample)}"</div>`);
-            }
+            lines.push(`    <div><span class="path" onclick="copyText(this)">${escapeHtml(list.container)}</span> <span class="count">[${list.itemCount} items]</span></div>`);
             lines.push('  </div>');
         });
     }
 
     // Images
     if (selectors.images.length > 0) {
-        lines.push('  <h3 style="color:#c586c0">Images (covers):</h3>');
+        lines.push('  <h3>Images (covers):</h3>');
         selectors.images.slice(0, 5).forEach(img => {
             lines.push('  <div class="selector-box">');
-            lines.push(`    <div><span class="path">${escapeHtml(img.selector)}</span></div>`);
+            lines.push(`    <div><span class="path" onclick="copyText(this)">${escapeHtml(img.selector)}</span></div>`);
             lines.push(`    <div class="indent href">${escapeHtml(img.src)}</div>`);
-            if (img.alt) lines.push(`    <div class="indent text">alt: "${escapeHtml(img.alt)}"</div>`);
             lines.push('  </div>');
         });
     }
 
     lines.push('</div>');
 
-    // Full structure tree
+    // Quick copy selectors
     lines.push('<div class="section">');
-    lines.push('  <div class="section-title">== FULL STRUCTURE TREE ==</div>');
-    lines.push('  <pre>');
+    lines.push('  <div class="section-title">ALL DATA SELECTORS (click to copy)</div>');
+    lines.push('  <div style="display:flex;flex-wrap:wrap;gap:5px;">');
 
-    const dataNodes = structure.filter(n => n.isData || n.childCount > 2);
-    dataNodes.forEach(node => {
-        const indent = '  '.repeat(node.depth);
-        const dataMarker = node.isData ? '<span class="data">DATA</span> ' : '';
-        const countInfo = node.count > 1 ? ` <span class="count">x${node.count}</span>` : '';
-        const textInfo = node.text ? ` <span class="text">"${escapeHtml(node.text)}"</span>` : '';
-        const hrefInfo = node.href ? ` <span class="href">[${escapeHtml(node.href)}]</span>` : '';
-
-        lines.push(`${indent}${dataMarker}<span class="tag">${node.tag}</span> <span class="path">${escapeHtml(node.selector)}</span>${countInfo}${textInfo}${hrefInfo}`);
-    });
-
-    lines.push('  </pre>');
-    lines.push('</div>');
-
-    // Raw condensed selectors for quick copy
-    lines.push('<div class="section">');
-    lines.push('  <div class="section-title">== QUICK COPY SELECTORS ==</div>');
-    lines.push('  <pre style="color:#9cdcfe">');
-
-    // Unique selectors for data nodes
     const uniqueSelectors = [...new Set(
         structure
             .filter(n => n.isData)
-            .map(n => n.path)
+            .map(n => n.selector)
     )];
-    uniqueSelectors.slice(0, 30).forEach(sel => {
-        lines.push(escapeHtml(sel));
+    uniqueSelectors.slice(0, 50).forEach(sel => {
+        lines.push(`    <span class="path" onclick="copyText(this)" style="padding:3px 8px;background:#333;border-radius:3px;">${escapeHtml(sel)}</span>`);
+    });
+
+    lines.push('  </div>');
+    lines.push('</div>');
+
+    // Full structure tree
+    lines.push('<div class="section">');
+    lines.push('  <div class="section-title">STRUCTURE TREE</div>');
+    lines.push('  <pre>');
+
+    const dataNodes = structure.filter(n => n.isData || n.childCount > 2);
+    dataNodes.slice(0, 200).forEach(node => {
+        const indent = '  '.repeat(Math.min(node.depth, 6));
+        const dataMarker = node.isData ? '<span class="data">★</span> ' : '';
+        const countInfo = node.count > 1 ? ` <span class="count">×${node.count}</span>` : '';
+        const textInfo = node.text ? ` <span class="text">"${escapeHtml(node.text)}"</span>` : '';
+        const hrefInfo = node.href ? ` <span class="href">[${escapeHtml(node.href)}]</span>` : '';
+
+        lines.push(`${indent}${dataMarker}<span class="tag">${node.tag}</span> <span class="path" onclick="copyText(this)">${escapeHtml(node.selector)}</span>${countInfo}${textInfo}${hrefInfo}`);
     });
 
     lines.push('  </pre>');
@@ -489,9 +545,9 @@ async function promptForUrls() {
     });
 
     console.log(`
-HTML Structure Extractor
-========================
-Paste your URLs below (one per line).
+HTML Structure Extractor (Puppeteer)
+====================================
+Paste your URLs below (one per line or space-separated).
 Press Enter twice when done.
 `);
 
@@ -508,7 +564,6 @@ Press Enter twice when done.
                 }
             } else {
                 emptyLineCount = 0;
-                // Extract URLs from the line (handles pasted text with multiple URLs)
                 const urlMatches = trimmed.match(/https?:\/\/[^\s"'<>]+/g);
                 if (urlMatches) {
                     urls.push(...urlMatches);
@@ -529,7 +584,6 @@ Press Enter twice when done.
 async function main() {
     let args = process.argv.slice(2);
 
-    // If no arguments, go interactive
     if (args.length === 0) {
         const urls = await promptForUrls();
         if (urls.length === 0) {
@@ -555,7 +609,6 @@ async function main() {
         process.exit(1);
     }
 
-    // Get domain from first URL for output folder
     const domain = new URL(urls[0]).hostname;
     const outputDir = path.join('html-output', domain);
 
@@ -564,49 +617,46 @@ async function main() {
     console.log(`URLs to process: ${urls.length}`);
     console.log(`Output directory: ${outputDir}\n`);
 
-    // Create output directory
     await fs.mkdir(outputDir, { recursive: true });
 
-    // Process each URL
-    for (let i = 0; i < urls.length; i++) {
-        const url = urls[i];
+    try {
+        for (let i = 0; i < urls.length; i++) {
+            const url = urls[i];
 
-        try {
-            // Fetch page
-            const html = await fetchPage(url);
-            console.log(`  Analyzing structure...`);
-
-            // Process HTML
-            const { structure, selectors } = processHtml(html, url);
-
-            // Generate output
-            const output = generateOutput(url, structure, selectors);
-
-            // Determine filename
-            let filename;
             try {
-                const urlObj = new URL(url);
-                const pathPart = urlObj.pathname.replace(/\//g, '_').replace(/^_/, '') || 'index';
-                const queryPart = urlObj.search ? '_' + urlObj.search.replace(/[?&=]/g, '_').substring(0, 30) : '';
-                filename = `${pathPart}${queryPart}.html`.replace(/[<>:"|?*]/g, '_');
-            } catch {
-                filename = `page-${i + 1}.html`;
+                const html = await fetchPage(url);
+                console.log(`  Analyzing structure...`);
+
+                const { structure, selectors } = processHtml(html, url);
+                const output = generateOutput(url, structure, selectors);
+
+                let filename;
+                try {
+                    const urlObj = new URL(url);
+                    const pathPart = urlObj.pathname.replace(/\//g, '_').replace(/^_/, '') || 'index';
+                    const queryPart = urlObj.search ? '_' + urlObj.search.replace(/[?&=]/g, '_').substring(0, 30) : '';
+                    filename = `${pathPart}${queryPart}.html`.replace(/[<>:"|?*]/g, '_').substring(0, 100);
+                } catch {
+                    filename = `page-${i + 1}.html`;
+                }
+
+                const outputPath = path.join(outputDir, filename);
+                await fs.writeFile(outputPath, output, 'utf-8');
+                console.log(`  ✓ Saved: ${outputPath}\n`);
+
+            } catch (error) {
+                console.error(`  ✗ Error: ${error.message}\n`);
             }
-
-            // Write output
-            const outputPath = path.join(outputDir, filename);
-            await fs.writeFile(outputPath, output, 'utf-8');
-            console.log(`  Saved: ${outputPath}\n`);
-
-        } catch (error) {
-            console.error(`  Error processing ${url}: ${error.message}\n`);
         }
+    } finally {
+        await closeBrowser();
     }
 
-    console.log(`Done! Check ${outputDir}/ for output files.`);
+    console.log(`Done! Open the HTML files in ${outputDir}/ to view results.`);
 }
 
-main().catch(error => {
+main().catch(async (error) => {
     console.error('Fatal error:', error);
+    await closeBrowser();
     process.exit(1);
 });
