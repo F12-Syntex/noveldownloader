@@ -1,0 +1,257 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Source Configuration",
+    "description": "Schema for novel/manga/webtoon source configurations",
+    "type": "object",
+    "required": ["name", "id", "baseUrl", "search", "chapterList", "chapterContent"],
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "Display name of the source"
+        },
+        "id": {
+            "type": "string",
+            "description": "Unique identifier (typically the domain name)"
+        },
+        "baseUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Base URL of the source website"
+        },
+        "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether this source is enabled"
+        },
+        "version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "description": "Source config version (semver)"
+        },
+        "contentType": {
+            "type": "string",
+            "enum": ["novel", "manga", "webtoon", "lightnovel", "fanfiction"],
+            "default": "novel",
+            "description": "Type of content this source provides"
+        },
+        "http": {
+            "type": "object",
+            "description": "HTTP request configuration",
+            "properties": {
+                "timeout": {
+                    "type": "integer",
+                    "default": 15000,
+                    "description": "Request timeout in milliseconds"
+                },
+                "retryAttempts": {
+                    "type": "integer",
+                    "default": 3,
+                    "description": "Number of retry attempts on failure"
+                },
+                "retryDelay": {
+                    "type": "integer",
+                    "default": 1000,
+                    "description": "Delay between retries in milliseconds"
+                },
+                "rateLimit": {
+                    "type": "integer",
+                    "default": 300,
+                    "description": "Minimum delay between requests in milliseconds"
+                },
+                "userAgent": {
+                    "type": "string",
+                    "description": "User-Agent header for requests"
+                },
+                "usePuppeteer": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Use headless browser for sites with anti-bot protection"
+                },
+                "jsWaitTime": {
+                    "type": "integer",
+                    "default": 2000,
+                    "description": "Time to wait for JS content when using Puppeteer (ms)"
+                }
+            }
+        },
+        "search": {
+            "type": "object",
+            "required": ["url", "resultSelector", "fields"],
+            "description": "Search page configuration",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Search URL template. Use {baseUrl} and {query} placeholders"
+                },
+                "resultSelector": {
+                    "type": "string",
+                    "description": "CSS selector for each search result item"
+                },
+                "fields": {
+                    "$ref": "#/$defs/fieldMap",
+                    "description": "Field extractors for search results"
+                }
+            }
+        },
+        "novelDetails": {
+            "type": "object",
+            "description": "Novel/manga details page configuration",
+            "properties": {
+                "fields": {
+                    "$ref": "#/$defs/fieldMap",
+                    "description": "Field extractors for details page"
+                }
+            }
+        },
+        "chapterList": {
+            "type": "object",
+            "description": "Chapter list extraction configuration",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["list", "sequential"],
+                    "default": "list",
+                    "description": "list: load all chapters upfront. sequential: use next/prev navigation during download"
+                },
+                "containerSelector": {
+                    "type": "string",
+                    "description": "CSS selector for chapter link elements (required for 'list' mode)"
+                },
+                "firstChapterSelector": {
+                    "type": "string",
+                    "description": "CSS selector for first chapter link on novel details page (required for 'sequential' mode)"
+                },
+                "fields": {
+                    "$ref": "#/$defs/fieldMap",
+                    "description": "Field extractors for each chapter"
+                },
+                "chapterNumberPattern": {
+                    "type": "string",
+                    "description": "Regex pattern to extract chapter number from title"
+                },
+                "chapterNumberUrlPattern": {
+                    "type": "string",
+                    "description": "Regex pattern to extract chapter number from URL"
+                },
+                "pagination": {
+                    "$ref": "#/$defs/pagination"
+                }
+            }
+        },
+        "chapterContent": {
+            "type": "object",
+            "required": ["contentSelector"],
+            "description": "Chapter content extraction configuration",
+            "properties": {
+                "titleSelectors": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "CSS selectors for chapter title (tried in order)"
+                },
+                "contentSelector": {
+                    "type": "string",
+                    "description": "CSS selector for main content container"
+                },
+                "removeSelectors": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "CSS selectors for elements to remove from content"
+                },
+                "paragraphSelector": {
+                    "type": "string",
+                    "default": "p",
+                    "description": "CSS selector for paragraph elements"
+                },
+                "navigation": {
+                    "type": "object",
+                    "description": "Chapter navigation selectors (required for 'sequential' mode)",
+                    "properties": {
+                        "nextSelector": {
+                            "type": "string",
+                            "description": "CSS selector for next chapter link"
+                        },
+                        "prevSelector": {
+                            "type": "string",
+                            "description": "CSS selector for previous chapter link"
+                        },
+                        "nextText": {
+                            "type": "string",
+                            "description": "Text pattern to identify next link (e.g., 'Next', '>')"
+                        },
+                        "prevText": {
+                            "type": "string",
+                            "description": "Text pattern to identify prev link (e.g., 'Prev', '<')"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "$defs": {
+        "fieldMap": {
+            "type": "object",
+            "additionalProperties": {
+                "$ref": "#/$defs/fieldExtractor"
+            }
+        },
+        "fieldExtractor": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector to find the element"
+                },
+                "attribute": {
+                    "type": "string",
+                    "enum": ["text", "href", "src", "title", "alt", "data-*"],
+                    "description": "Attribute to extract (use 'text' for innerText)"
+                },
+                "fallback": {
+                    "type": "string",
+                    "description": "Fallback attribute if primary is empty"
+                },
+                "default": {
+                    "type": "string",
+                    "description": "Default value if extraction fails"
+                },
+                "multiple": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Extract from all matching elements as array"
+                },
+                "transform": {
+                    "type": "string",
+                    "enum": ["status", "trim", "lowercase", "uppercase"],
+                    "description": "Transform function to apply to extracted value"
+                }
+            }
+        },
+        "pagination": {
+            "type": "object",
+            "description": "Pagination configuration for chapter lists",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["query", "path", "infinite"],
+                    "description": "Pagination type"
+                },
+                "param": {
+                    "type": "string",
+                    "description": "Query parameter name for page number"
+                },
+                "lastPageSelector": {
+                    "type": "string",
+                    "description": "CSS selector for last page link"
+                },
+                "pageLinksSelector": {
+                    "type": "string",
+                    "description": "CSS selector for all page links"
+                },
+                "totalPagesInputSelector": {
+                    "type": "string",
+                    "description": "CSS selector for total pages input/element"
+                }
+            }
+        }
+    }
+}

@@ -31,26 +31,29 @@ export async function loadSources() {
         // Ensure sources directory exists
         await fs.mkdir(SOURCES_DIR, { recursive: true });
 
-        // Read all directories in sources folder
+        // Read all .json files in sources folder (excluding schema)
         const entries = await fs.readdir(SOURCES_DIR, { withFileTypes: true });
 
         for (const entry of entries) {
-            if (entry.isDirectory()) {
-                const sourceConfigPath = path.join(SOURCES_DIR, entry.name, 'source.json');
+            // Skip directories, non-json files, and schema file
+            if (!entry.isFile() || !entry.name.endsWith('.json') || entry.name === 'source_schema.json') {
+                continue;
+            }
 
-                try {
-                    const configData = await fs.readFile(sourceConfigPath, 'utf-8');
-                    const config = JSON.parse(configData);
+            const sourceConfigPath = path.join(SOURCES_DIR, entry.name);
 
-                    // Add directory info to source
-                    config._directory = entry.name;
-                    config._configPath = sourceConfigPath;
+            try {
+                const configData = await fs.readFile(sourceConfigPath, 'utf-8');
+                const config = JSON.parse(configData);
 
-                    sources.push(config);
-                    log.debug(`Loaded source: ${config.name} (${config.id})`);
-                } catch (err) {
-                    log.warn(`Failed to load source from ${entry.name}: ${err.message}`);
-                }
+                // Add file info to source
+                config._filename = entry.name;
+                config._configPath = sourceConfigPath;
+
+                sources.push(config);
+                log.debug(`Loaded source: ${config.name} (${config.id})`);
+            } catch (err) {
+                log.warn(`Failed to load source from ${entry.name}: ${err.message}`);
             }
         }
 
@@ -144,7 +147,7 @@ export async function setSourceEnabled(sourceId, enabled) {
     // Write updated config back to file
     const configPath = source._configPath;
     const configToSave = { ...source };
-    delete configToSave._directory;
+    delete configToSave._filename;
     delete configToSave._configPath;
 
     await fs.writeFile(configPath, JSON.stringify(configToSave, null, 4), 'utf-8');

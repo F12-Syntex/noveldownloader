@@ -227,11 +227,15 @@ async function downloadScreen() {
         const novelDetails = await getNovelDetails(selectedNovel.url);
 
         // Display novel info
+        const source = getActiveSource();
+        const isSequential = source?.chapterList?.mode === 'sequential';
+        const chapterDisplay = isSequential ? 'tbd' : novelDetails.totalChapters;
+
         console.log(chalk.cyan(`\n━━━ ${t.Item} Details ━━━`));
         console.log(chalk.white(`Title:       ${novelDetails.title}`));
         console.log(chalk.white(`Author:      ${novelDetails.author}`));
         console.log(chalk.white(`Status:      ${novelDetails.status}`));
-        console.log(chalk.white(`${t.Units}:   ${novelDetails.totalChapters}`));
+        console.log(chalk.white(`${t.Units}:   ${chapterDisplay}`));
         console.log(chalk.white(`Genres:      ${novelDetails.genres.join(', ')}`));
         if (novelDetails.rating) {
             console.log(chalk.white(`Rating:      ${novelDetails.rating}`));
@@ -241,11 +245,14 @@ async function downloadScreen() {
         }
 
         // Confirm download
+        const downloadMsg = isSequential
+            ? `Download all ${t.units}?`
+            : `Download ${novelDetails.totalChapters} ${t.units}?`;
         const { confirmAction } = await inquirer.prompt([
             {
                 type: 'list',
                 name: 'confirmAction',
-                message: `Download ${novelDetails.totalChapters} ${t.units}?`,
+                message: downloadMsg,
                 choices: [
                     { name: 'Yes, download', value: 'yes' },
                     { name: 'No, go back', value: NAV.BACK }

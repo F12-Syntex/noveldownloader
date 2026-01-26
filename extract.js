@@ -14,6 +14,7 @@ import { URL } from 'url';
 const CONFIG = {
     removeTags: ['script', 'style', 'noscript', 'iframe', 'svg', 'meta', 'link', 'head', 'br', 'hr', 'input', 'button'],
     maxText: 60,
+    jsWaitTime: 5000, // Wait for JS-rendered content
     browser: {
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
@@ -43,7 +44,8 @@ async function fetchPage(url) {
         await page.setRequestInterception(true);
         page.on('request', r => ['image', 'font', 'media', 'stylesheet'].includes(r.resourceType()) ? r.abort() : r.continue());
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-        await new Promise(r => setTimeout(r, 1500));
+        console.log(`  Waiting ${CONFIG.jsWaitTime / 1000}s for JS content...`);
+        await new Promise(r => setTimeout(r, CONFIG.jsWaitTime));
         return await page.content();
     } finally { await page.close(); }
 }
