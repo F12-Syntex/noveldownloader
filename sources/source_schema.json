@@ -71,6 +71,26 @@
                     "type": "integer",
                     "default": 2000,
                     "description": "Time to wait for JS content when using Puppeteer (ms)"
+                },
+                "stealth": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Use stealth plugin to bypass bot detection (Cloudflare)"
+                },
+                "headless": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run browser in headless mode (false for manual Cloudflare solving)"
+                },
+                "waitForCloudflare": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Wait for Cloudflare challenge to complete"
+                },
+                "cloudflareTimeout": {
+                    "type": "integer",
+                    "default": 30000,
+                    "description": "Max time to wait for Cloudflare challenge (ms)"
                 }
             }
         },
@@ -111,15 +131,29 @@
                     "type": "string",
                     "enum": ["list", "sequential"],
                     "default": "list",
-                    "description": "list: load all chapters upfront. sequential: use next/prev navigation during download"
+                    "description": "list: load all chapters upfront from details page. sequential: use next/prev navigation during download"
                 },
                 "containerSelector": {
                     "type": "string",
                     "description": "CSS selector for chapter link elements (required for 'list' mode)"
                 },
                 "firstChapterSelector": {
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "description": "CSS selector (can be comma-separated for fallbacks)"
+                        },
+                        {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Array of CSS selectors tried in order"
+                        }
+                    ],
+                    "description": "CSS selector(s) for first chapter link on novel details page (required for 'sequential' mode)"
+                },
+                "chapterListTabSelector": {
                     "type": "string",
-                    "description": "CSS selector for first chapter link on novel details page (required for 'sequential' mode)"
+                    "description": "CSS selector for tab/button to click to reveal chapter list"
                 },
                 "fields": {
                     "$ref": "#/$defs/fieldMap",
@@ -146,7 +180,7 @@
                 "titleSelectors": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "CSS selectors for chapter title (tried in order)"
+                    "description": "CSS selectors for chapter title (tried in order until one works)"
                 },
                 "contentSelector": {
                     "type": "string",
@@ -155,12 +189,16 @@
                 "removeSelectors": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "CSS selectors for elements to remove from content"
+                    "description": "CSS selectors for elements to remove from content (ads, scripts, etc.)"
                 },
                 "paragraphSelector": {
                     "type": "string",
                     "default": "p",
-                    "description": "CSS selector for paragraph elements"
+                    "description": "CSS selector for paragraph elements within content"
+                },
+                "waitForSelector": {
+                    "type": "string",
+                    "description": "CSS selector to wait for before extracting content (for dynamic pages)"
                 },
                 "navigation": {
                     "type": "object",
@@ -168,11 +206,11 @@
                     "properties": {
                         "nextSelector": {
                             "type": "string",
-                            "description": "CSS selector for next chapter link"
+                            "description": "CSS selector for next chapter link (e.g., 'a#next_chap')"
                         },
                         "prevSelector": {
                             "type": "string",
-                            "description": "CSS selector for previous chapter link"
+                            "description": "CSS selector for previous chapter link (e.g., 'a#prev_chap')"
                         },
                         "nextText": {
                             "type": "string",
@@ -181,6 +219,11 @@
                         "prevText": {
                             "type": "string",
                             "description": "Text pattern to identify prev link (e.g., 'Prev', '<')"
+                        },
+                        "disabledClass": {
+                            "type": "string",
+                            "default": "disabled",
+                            "description": "CSS class indicating navigation is disabled"
                         }
                     }
                 }
@@ -198,17 +241,27 @@
             "type": "object",
             "properties": {
                 "selector": {
-                    "type": "string",
-                    "description": "CSS selector to find the element"
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "description": "CSS selector (can be comma-separated for fallbacks)"
+                        },
+                        {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Array of CSS selectors tried in order"
+                        }
+                    ],
+                    "description": "CSS selector(s) to find the element. Supports comma-separated or array for fallbacks"
                 },
                 "attribute": {
                     "type": "string",
-                    "enum": ["text", "href", "src", "title", "alt", "data-*"],
-                    "description": "Attribute to extract (use 'text' for innerText)"
+                    "enum": ["text", "html", "href", "src", "data-src", "title", "alt"],
+                    "description": "Attribute to extract (use 'text' for innerText, 'html' for innerHTML)"
                 },
                 "fallback": {
                     "type": "string",
-                    "description": "Fallback attribute if primary is empty"
+                    "description": "Fallback attribute if primary is empty (use 'text' for innerText)"
                 },
                 "default": {
                     "type": "string",

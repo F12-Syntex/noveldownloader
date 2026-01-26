@@ -5,7 +5,9 @@
 
 import * as cheerio from 'cheerio';
 import fetch from 'node-fetch';
-import puppeteer from 'puppeteer';
+import puppeteerVanilla from 'puppeteer';
+import puppeteerExtra from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { log } from './logger.js';
 import {
     getActiveSource,
@@ -14,19 +16,43 @@ import {
     ensureAbsoluteUrl
 } from './sourceManager.js';
 
+// Add stealth plugin to puppeteer-extra
+puppeteerExtra.use(StealthPlugin());
+
 // Shared browser instance for Puppeteer
 let browserInstance = null;
+let browserUseStealth = false;
 
 /**
  * Get or create browser instance
  */
-async function getBrowser() {
+async function getBrowser(source) {
+    const useStealth = source?.http?.stealth || false;
+    const headless = source?.http?.headless !== false; // default true
+
+    // If stealth mode changed, close existing browser
+    if (browserInstance && browserUseStealth !== useStealth) {
+        await browserInstance.close();
+        browserInstance = null;
+    }
+
     if (!browserInstance) {
-        log.debug('Starting headless browser...');
-        browserInstance = await puppeteer.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+        const launcher = useStealth ? puppeteerExtra : puppeteerVanilla;
+        const modeText = useStealth ? 'stealth mode' : 'standard mode';
+        log.debug(`Starting browser in ${modeText}...`);
+
+        browserInstance = await launcher.launch({
+            headless: headless ? 'new' : false,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-blink-features=AutomationControlled',
+                '--window-size=1920,1080'
+            ]
         });
+        browserUseStealth = useStealth;
     }
     return browserInstance;
 }

@@ -1,0 +1,134 @@
+{
+    "$schema": "./source_schema.json",
+    "name": "NovelBin",
+    "id": "novelbin.com",
+    "baseUrl": "https://novelbin.com",
+    "enabled": true,
+    "version": "1.0.0",
+    "contentType": "novel",
+    "http": {
+        "timeout": 60000,
+        "retryAttempts": 3,
+        "retryDelay": 2000,
+        "rateLimit": 2000,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "usePuppeteer": true,
+        "jsWaitTime": 3000,
+        "stealth": true,
+        "headless": true,
+        "waitForCloudflare": true,
+        "cloudflareTimeout": 30000
+    },
+    "search": {
+        "url": "{baseUrl}/search?keyword={query}",
+        "resultSelector": "div#list-page div.archive div.list > div:not(.header-list), div.list-novel .row",
+        "fields": {
+            "title": {
+                "selector": "h3.novel-title a, .novel-title a, h3 a",
+                "attribute": "text"
+            },
+            "url": {
+                "selector": "h3.novel-title a, .novel-title a, h3 a",
+                "attribute": "href"
+            },
+            "author": {
+                "selector": ".author, span.author",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "cover": {
+                "selector": "img.cover, .cover img, img",
+                "attribute": "src",
+                "fallback": "data-src"
+            }
+        }
+    },
+    "novelDetails": {
+        "fields": {
+            "title": {
+                "selector": "div.desc h3.title, h3.title, .book-info h1",
+                "attribute": "text"
+            },
+            "cover": {
+                "selector": ".book img, .info-holder img, img.cover",
+                "attribute": "src",
+                "fallback": "data-src"
+            },
+            "author": {
+                "selector": "ul.info li a[href*='author'], ul.info li a[href*='novelbin-author'], a[href*='/author/']",
+                "attribute": "text",
+                "default": "Unknown"
+            },
+            "genres": {
+                "selector": "ul.info li a[href*='genre'], ul.info li a[href*='novelbin-genres'], a[href*='/genre/']",
+                "attribute": "text",
+                "multiple": true
+            },
+            "status": {
+                "selector": "ul.info li a.text-primary, a[href*='status'], .info-meta span:contains('Status') + span",
+                "attribute": "text",
+                "transform": "status"
+            },
+            "description": {
+                "selector": "div#tab-description div.desc-text, .desc-text, .description, div.desc",
+                "attribute": "text"
+            },
+            "ratingValue": {
+                "selector": "[itemprop='ratingValue'], .rating-value, .rate-num",
+                "attribute": "text"
+            },
+            "ratingCount": {
+                "selector": "[itemprop='ratingCount'], .rating-count",
+                "attribute": "text"
+            }
+        }
+    },
+    "chapterList": {
+        "mode": "sequential",
+        "firstChapterSelector": "div#list-chapter ul.list-chapter li:first-child a, ul.list-chapter li:first-child a, .chapter-list a:first-child, a[href*='chapter-1'], a[href*='/chapter/1']",
+        "chapterListTabSelector": "a#tab-chapters-title, .tab-chapters",
+        "containerSelector": "div#list-chapter ul.list-chapter li a, ul.list-chapter li a",
+        "fields": {
+            "title": {
+                "attribute": "title",
+                "fallback": "text"
+            },
+            "url": {
+                "attribute": "href"
+            }
+        },
+        "chapterNumberPattern": "chapter\\s*(\\d+)",
+        "chapterNumberUrlPattern": "chapter-(\\d+)"
+    },
+    "chapterContent": {
+        "titleSelectors": [
+            "h2 span.chr-text",
+            "h2 a.chr-title span.chr-text",
+            "div#chr-content h4",
+            ".chapter-title",
+            "h2",
+            "h1"
+        ],
+        "contentSelector": "div#chr-content, #chapter-content, .chapter-content",
+        "removeSelectors": [
+            "div[id^='pf-']",
+            "script",
+            "style",
+            "iframe",
+            "noscript",
+            ".ads",
+            "[id*='ads']",
+            "[class*='ads']",
+            "h4",
+            "div[align='center']",
+            ".adsbygoogle"
+        ],
+        "paragraphSelector": "p",
+        "waitForSelector": "div#chr-content p",
+        "navigation": {
+            "nextSelector": "a#next_chap",
+            "prevSelector": "a#prev_chap",
+            "disabledClass": "disabled"
+        }
+    }
+}
