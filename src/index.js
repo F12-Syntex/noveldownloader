@@ -29,7 +29,7 @@ import {
 // Navigation System
 // ============================================================================
 
-// Navigation history stack
+// Navigation history stack - stores screens we came FROM (not current screen)
 const navHistory = [];
 
 // Navigation constants
@@ -41,10 +41,10 @@ const NAV = {
 };
 
 /**
- * Push current screen to history
+ * Push a screen to history (call when navigating AWAY from a screen)
  */
-function pushHistory(screen, context = {}) {
-    navHistory.push({ screen, context });
+function pushHistory(screen) {
+    navHistory.push(screen);
 }
 
 /**
@@ -66,30 +66,6 @@ function clearHistory() {
  */
 function getBackChoice(label = '← Back') {
     return { name: chalk.gray(label), value: NAV.BACK };
-}
-
-/**
- * Handle navigation result
- * Returns the next screen to show, or null to exit
- */
-function handleNavigation(result) {
-    if (result === NAV.BACK) {
-        const prev = popHistory();
-        return prev ? prev.screen : 'main';
-    }
-    if (result === NAV.HOME) {
-        clearHistory();
-        return 'main';
-    }
-    if (result === NAV.EXIT) {
-        return null;
-    }
-    if (result === NAV.STAY) {
-        // Stay on current screen (re-run it)
-        const current = navHistory[navHistory.length - 1];
-        return current ? current.screen : 'main';
-    }
-    return result;
 }
 
 // ============================================================================
@@ -714,26 +690,36 @@ async function main() {
                 continue;
             }
 
-            // Track navigation (except for main menu)
-            if (currentScreen !== 'main') {
-                pushHistory(currentScreen);
-            }
-
             // Run the screen
             const result = await screenFn();
 
-            // Handle navigation
-            currentScreen = handleNavigation(result);
+            // Handle navigation based on result
+            if (result === NAV.BACK) {
+                // Go back to previous screen
+                const prev = popHistory();
+                currentScreen = prev || 'main';
+            } else if (result === NAV.EXIT) {
+                // Exit the application
+                currentScreen = null;
+            } else if (result === NAV.STAY) {
+                // Stay on current screen (re-run it) - don't change anything
+            } else if (result === NAV.HOME) {
+                // Go directly to main menu
+                clearHistory();
+                currentScreen = 'main';
+            } else if (typeof result === 'string') {
+                // Navigate to a new screen - push current screen to history first
+                if (currentScreen !== 'main') {
+                    pushHistory(currentScreen);
+                }
+                currentScreen = result;
+            }
 
         } catch (error) {
             if (error.name === 'ExitPromptError') {
                 // User pressed Ctrl+C - go back or exit
                 const prev = popHistory();
-                if (prev) {
-                    currentScreen = prev.screen;
-                } else {
-                    currentScreen = null;
-                }
+                currentScreen = prev || null;
             } else {
                 console.log(chalk.red(`\nUnexpected error: ${error.message}`));
                 log.error('Unexpected error', { error: error.message, stack: error.stack });

@@ -7,6 +7,9 @@ dist/
 # Temp files
 temp/
 
+# HTML extraction output
+html-output/
+
 # Exports (user data)
 exports/
 

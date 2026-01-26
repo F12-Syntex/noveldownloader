@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "extract": "node extract.js",
     "build": "node build.js",
     "build:exe": "node build.js --no-installer",
     "build:installer": "node build.js --installer-only",
