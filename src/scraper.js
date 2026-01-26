@@ -68,30 +68,82 @@ export async function closeBrowser() {
 }
 
 /**
+ * Wait for Cloudflare challenge to complete
+ */
+async function waitForCloudflare(page, timeout = 30000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+        const isCloudflare = await page.evaluate(() => {
+            const bodyText = document.body?.innerText || '';
+            return bodyText.includes('Verify you are human') ||
+                   bodyText.includes('checking your browser') ||
+                   bodyText.includes('Just a moment') ||
+                   document.querySelector('iframe[src*="challenges.cloudflare.com"]') !== null;
+        });
+
+        if (!isCloudflare) {
+            return true; // Not on Cloudflare page, we're good
+        }
+
+        log.debug('Waiting for Cloudflare challenge...');
+        await new Promise(r => setTimeout(r, 2000));
+    }
+
+    log.warn('Cloudflare wait timeout');
+    return false;
+}
+
+/**
  * Fetch a page using Puppeteer (for anti-bot sites)
  */
 async function fetchPageWithPuppeteer(url, source, attempt = 1) {
     const config = getHttpConfig(source);
     const jsWaitTime = source.http?.jsWaitTime || 2000;
+    const waitForCf = source.http?.waitForCloudflare || false;
+    const cfTimeout = source.http?.cloudflareTimeout || 30000;
 
     try {
         log.debug(`Fetching with browser: ${url}`, { attempt });
 
-        const browser = await getBrowser();
+        const browser = await getBrowser(source);
         const page = await browser.newPage();
 
         try {
+            // Set viewport for realistic browsing
+            await page.setViewport({ width: 1920, height: 1080 });
+
             await page.setUserAgent(config.userAgent);
-            await page.setRequestInterception(true);
-            page.on('request', r => {
-                if (['image', 'font', 'media'].includes(r.resourceType())) {
-                    r.abort();
-                } else {
-                    r.continue();
-                }
-            });
+
+            // Set extra headers for stealth mode
+            if (source.http?.stealth) {
+                await page.setExtraHTTPHeaders({
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                });
+            }
+
+            // Only intercept requests if not in stealth mode (can interfere with CF)
+            if (!source.http?.stealth) {
+                await page.setRequestInterception(true);
+                page.on('request', r => {
+                    if (['image', 'font', 'media'].includes(r.resourceType())) {
+                        r.abort();
+                    } else {
+                        r.continue();
+                    }
+                });
+            }
 
             await page.goto(url, { waitUntil: 'networkidle2', timeout: config.timeout });
+
+            // Wait for Cloudflare if enabled
+            if (waitForCf) {
+                await waitForCloudflare(page, cfTimeout);
+            }
 
             // Try to dismiss consent popup if present
             try {
@@ -187,6 +239,92 @@ async function fetchPage(url, source, attempt = 1) {
         return fetchPageWithPuppeteer(url, source, attempt);
     }
     return fetchPageWithFetch(url, source, attempt);
+}
+
+/**
+ * Fetch a page with Puppeteer and perform interactions (click tabs, etc.)
+ * Returns the HTML after interactions complete
+ */
+async function fetchPageWithInteractions(url, source, interactions = {}) {
+    const config = getHttpConfig(source);
+    const jsWaitTime = source.http?.jsWaitTime || 2000;
+    const waitForCf = source.http?.waitForCloudflare || false;
+    const cfTimeout = source.http?.cloudflareTimeout || 30000;
+
+    log.debug(`Fetching with interactions: ${url}`);
+
+    const browser = await getBrowser(source);
+    const page = await browser.newPage();
+
+    try {
+        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setUserAgent(config.userAgent);
+
+        if (source.http?.stealth) {
+            await page.setExtraHTTPHeaders({
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            });
+        }
+
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: config.timeout });
+
+        // Wait for Cloudflare if enabled
+        if (waitForCf) {
+            await waitForCloudflare(page, cfTimeout);
+        }
+
+        // Initial wait for JS content
+        await new Promise(r => setTimeout(r, jsWaitTime));
+
+        // Click on chapter list tab if specified
+        if (interactions.clickTabSelector) {
+            // Handle comma-separated selectors
+            const tabSelectors = interactions.clickTabSelector.includes(',')
+                ? interactions.clickTabSelector.split(',').map(s => s.trim())
+                : [interactions.clickTabSelector];
+
+            for (const selector of tabSelectors) {
+                try {
+                    const tabButton = await page.$(selector);
+                    if (tabButton) {
+                        log.debug(`Clicking tab: ${selector}`);
+                        await tabButton.click();
+                        await new Promise(r => setTimeout(r, 1500)); // Wait for tab content to load
+                        break; // Successfully clicked, stop trying
+                    }
+                } catch (e) {
+                    log.debug(`Tab click failed for ${selector}: ${e.message}`);
+                }
+            }
+        }
+
+        // Wait for a specific selector if specified
+        if (interactions.waitForSelector) {
+            // Handle comma-separated selectors - try each one
+            const selectors = interactions.waitForSelector.includes(',')
+                ? interactions.waitForSelector.split(',').map(s => s.trim())
+                : [interactions.waitForSelector];
+
+            for (const selector of selectors) {
+                try {
+                    await page.waitForSelector(selector, { timeout: 5000 });
+                    log.debug(`Found selector: ${selector}`);
+                    break; // Found one, stop waiting
+                } catch (e) {
+                    log.debug(`Selector not found: ${selector}`);
+                }
+            }
+        }
+
+        const html = await page.content();
+        return html;
+    } finally {
+        await page.close();
+    }
 }
 
 /**
@@ -476,7 +614,21 @@ export async function getNovelDetails(novelUrl, source = null) {
 
     log.debug(`Fetching novel details from: ${novelUrl}`);
 
-    const html = await fetchPage(novelUrl, source);
+    // Check if we need to click a tab to reveal chapters
+    const chapterListConfig = source.chapterList;
+    const needsInteraction = source.http?.usePuppeteer && chapterListConfig?.chapterListTabSelector;
+
+    let html;
+    if (needsInteraction) {
+        // Use interactive fetch to click chapter tab
+        html = await fetchPageWithInteractions(novelUrl, source, {
+            clickTabSelector: chapterListConfig.chapterListTabSelector,
+            waitForSelector: chapterListConfig.containerSelector || chapterListConfig.firstChapterSelector
+        });
+    } else {
+        html = await fetchPage(novelUrl, source);
+    }
+
     const $ = cheerio.load(html);
 
     const detailsConfig = source.novelDetails;
@@ -507,7 +659,6 @@ export async function getNovelDetails(novelUrl, source = null) {
         details.cover = ensureAbsoluteUrl(details.cover, source.baseUrl);
     }
 
-    const chapterListConfig = source.chapterList;
     const isSequential = chapterListConfig.mode === 'sequential';
 
     let uniqueChapters = [];
