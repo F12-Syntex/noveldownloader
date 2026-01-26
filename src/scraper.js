@@ -66,7 +66,36 @@ async function fetchPageWithPuppeteer(url, source, attempt = 1) {
             });
 
             await page.goto(url, { waitUntil: 'networkidle2', timeout: config.timeout });
+
+            // Try to dismiss consent popup if present
+            try {
+                const consentButton = await page.$('.fc-cta-consent, .fc-button-label, button[aria-label*="consent"], .accept-cookies');
+                if (consentButton) {
+                    await consentButton.click();
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            } catch (e) {
+                // Consent popup not found or couldn't click, continue anyway
+            }
+
+            // Wait for JS content
             await new Promise(r => setTimeout(r, jsWaitTime));
+
+            // For chapter pages, wait for navigation links to be populated
+            if (url.includes('/chapter')) {
+                try {
+                    await page.waitForFunction(() => {
+                        const nextBtn = document.querySelector('a#next_chap');
+                        const prevBtn = document.querySelector('a#prev_chap');
+                        // Wait until at least one nav button has an href
+                        return (nextBtn && nextBtn.href && !nextBtn.href.endsWith('#')) ||
+                               (prevBtn && prevBtn.href && !prevBtn.href.endsWith('#'));
+                    }, { timeout: 5000 });
+                } catch (e) {
+                    // Navigation might not exist (last chapter), continue anyway
+                    log.debug('Navigation wait timeout - might be last chapter');
+                }
+            }
 
             const html = await page.content();
             return html;
@@ -169,13 +198,32 @@ export async function fetchImage(url, source = null) {
 }
 
 /**
+ * Check if a URL value is valid (not a data: URL or empty)
+ */
+function isValidImageUrl(value) {
+    if (!value) return false;
+    if (value.startsWith('data:')) return false;
+    return true;
+}
+
+/**
  * Extract a field value from an element using source configuration
  */
 function extractField($, el, fieldConfig, baseUrl) {
     const $el = $(el);
-    let selectors = Array.isArray(fieldConfig.selector)
-        ? fieldConfig.selector
-        : [fieldConfig.selector];
+
+    // Handle both array and comma-separated selectors
+    let selectors;
+    if (Array.isArray(fieldConfig.selector)) {
+        selectors = fieldConfig.selector;
+    } else if (typeof fieldConfig.selector === 'string' && fieldConfig.selector.includes(',')) {
+        // Split comma-separated selectors
+        selectors = fieldConfig.selector.split(',').map(s => s.trim());
+    } else {
+        selectors = [fieldConfig.selector];
+    }
+
+    const isUrlAttr = ['src', 'data-src', 'href'].includes(fieldConfig.attribute);
 
     for (const selector of selectors) {
         const target = selector ? $el.find(selector).first() : $el;
@@ -191,12 +239,22 @@ function extractField($, el, fieldConfig, baseUrl) {
                 break;
             default:
                 value = target.attr(fieldConfig.attribute);
-                if (fieldConfig.attribute === 'href' || fieldConfig.attribute === 'src') {
+                // Skip data: URLs for image src attributes - try fallback
+                if (isUrlAttr && !isValidImageUrl(value) && fieldConfig.fallback && fieldConfig.fallback !== 'text') {
+                    value = target.attr(fieldConfig.fallback);
+                }
+                // Make URL absolute
+                if (isUrlAttr && isValidImageUrl(value)) {
                     value = ensureAbsoluteUrl(value, baseUrl);
                 }
         }
 
-        if (value) {
+        // For URL attributes, ensure it's a valid URL
+        if (isUrlAttr) {
+            if (isValidImageUrl(value)) {
+                return value;
+            }
+        } else if (value) {
             // Apply transform if specified
             if (fieldConfig.transform === 'status') {
                 value = value.toLowerCase().includes('completed') ? 'Completed' : 'Ongoing';
@@ -205,12 +263,21 @@ function extractField($, el, fieldConfig, baseUrl) {
         }
     }
 
-    // Check for fallback
+    // Check for fallback on the found target
     if (fieldConfig.fallback) {
-        const fallbackValue = fieldConfig.fallback === 'text'
-            ? $el.text().trim()
-            : $el.attr(fieldConfig.fallback);
-        if (fallbackValue) return fallbackValue;
+        const target = selectors[0] ? $el.find(selectors[0]).first() : $el;
+        if (target.length > 0) {
+            const fallbackValue = fieldConfig.fallback === 'text'
+                ? target.text().trim()
+                : target.attr(fieldConfig.fallback);
+            if (fallbackValue) {
+                if (isUrlAttr && isValidImageUrl(fallbackValue)) {
+                    return ensureAbsoluteUrl(fallbackValue, baseUrl);
+                } else if (!isUrlAttr) {
+                    return fallbackValue;
+                }
+            }
+        }
     }
 
     return fieldConfig.default || null;
@@ -422,12 +489,21 @@ export async function getNovelDetails(novelUrl, source = null) {
 
     if (isSequential) {
         // Sequential mode: just get the first chapter URL
-        const firstChapterEl = $(chapterListConfig.firstChapterSelector).first();
-        firstChapterUrl = firstChapterEl.attr('href');
-        if (firstChapterUrl) {
-            firstChapterUrl = ensureAbsoluteUrl(firstChapterUrl, source.baseUrl);
+        // Try each selector until we find one that works
+        const selectors = chapterListConfig.firstChapterSelector.includes(',')
+            ? chapterListConfig.firstChapterSelector.split(',').map(s => s.trim())
+            : [chapterListConfig.firstChapterSelector];
+
+        for (const selector of selectors) {
+            const firstChapterEl = $(selector).first();
+            const href = firstChapterEl.attr('href');
+            console.log(`[DEBUG] Trying selector "${selector}": found=${firstChapterEl.length > 0}, href="${href}"`);
+            if (href && href !== '#' && !href.startsWith('javascript:')) {
+                firstChapterUrl = ensureAbsoluteUrl(href, source.baseUrl);
+                break;
+            }
         }
-        log.debug(`Sequential mode: first chapter URL: ${firstChapterUrl}`);
+        console.log(`[DEBUG] First chapter URL: ${firstChapterUrl}`);
     } else {
         // List mode: get all chapters upfront
         const totalPages = getTotalPages($, source);
@@ -485,6 +561,10 @@ export async function getNovelDetails(novelUrl, source = null) {
 
         log.debug(`Total unique chapters: ${uniqueChapters.length}`);
     }
+
+    // Debug: log what we extracted
+    console.log(`[DEBUG] Extracted title: "${details.title}"`);
+    console.log(`[DEBUG] First chapter URL: "${firstChapterUrl}"`);
 
     return {
         title: details.title,
@@ -563,19 +643,39 @@ export async function getChapterContent(chapterUrl, source = null) {
         if (nav.nextSelector) {
             const nextEl = $(nav.nextSelector).first();
             const nextHref = nextEl.attr('href');
-            if (nextHref && !nextEl.hasClass('disabled') && !nextEl.attr('disabled')) {
+            const isDisabled = nextEl.hasClass('disabled') || nextEl.attr('disabled');
+            const hasNoClass = nextEl.hasClass('ismark'); // Some sites use this to mark unavailable
+
+            // Visible logging for debugging
+            console.log(`  [NAV] Next button: found=${nextEl.length > 0}, href="${nextHref}", disabled=${isDisabled}`);
+
+            // Check for valid URL
+            const isValidHref = nextHref &&
+                nextHref !== '#' &&
+                nextHref !== '' &&
+                !nextHref.startsWith('javascript:') &&
+                !nextHref.includes('undefined') &&
+                nextHref !== chapterUrl; // Not self-referencing
+
+            if (isValidHref && !isDisabled && !hasNoClass) {
                 nextChapterUrl = ensureAbsoluteUrl(nextHref, source.baseUrl);
+                console.log(`  [NAV] Next URL: ${nextChapterUrl}`);
+            } else if (nextEl.length > 0) {
+                console.log(`  [NAV] Next button exists but invalid: href="${nextHref}", disabled=${isDisabled}, valid=${isValidHref}`);
             }
         }
 
         if (nav.prevSelector) {
             const prevEl = $(nav.prevSelector).first();
             const prevHref = prevEl.attr('href');
-            if (prevHref && !prevEl.hasClass('disabled') && !prevEl.attr('disabled')) {
+            if (prevHref && prevHref !== '#' && !prevHref.startsWith('javascript:') &&
+                !prevEl.hasClass('disabled') && !prevEl.attr('disabled')) {
                 prevChapterUrl = ensureAbsoluteUrl(prevHref, source.baseUrl);
             }
         }
     }
+
+    log.debug(`Navigation: next="${nextChapterUrl}", prev="${prevChapterUrl}"`);
 
     return {
         title,

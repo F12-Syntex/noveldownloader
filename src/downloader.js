@@ -175,36 +175,33 @@ async function downloadNovelListMode(novel, options, downloadedSet, previouslyFa
 /**
  * Download all chapters of a novel (sequential mode - using next button)
  */
-async function downloadNovelSequentialMode(novel, options, downloadedSet) {
+async function downloadNovelSequentialMode(novel, options, downloadedSet, previousState) {
     const { onProgress = null } = options;
 
     if (!novel.firstChapterUrl) {
-        console.log(chalk.red('No first chapter URL found!'));
+        console.log(chalk.red('No first chapter URL found! Check firstChapterSelector in source config.'));
         return {
-            success: false,
-            downloaded: 0,
-            failed: 0,
-            skipped: 0,
-            failedChapters: []
+            results: { downloaded: 0, failed: 0, failedChapters: [], totalWordCount: 0 },
+            skippedCount: 0,
+            startTime: Date.now()
         };
     }
 
-    // Load previous state to resume from last chapter
-    const previousState = await storage.loadDownloadState(novel.title);
-    let currentUrl = previousState?.lastChapterUrl || novel.firstChapterUrl;
-    let chapterNum = previousState?.lastChapterNum || 1;
+    // Resume from previous state if available
+    let currentUrl = novel.firstChapterUrl;
+    let chapterNum = 1;
+    let skippedCount = 0;
 
-    // If we have downloaded chapters, skip to where we left off
-    if (downloadedSet.size > 0 && !previousState?.lastChapterUrl) {
-        chapterNum = downloadedSet.size + 1;
+    if (previousState?.sequentialState?.nextChapterUrl) {
+        // Resume from where we left off
+        currentUrl = previousState.sequentialState.nextChapterUrl;
+        chapterNum = previousState.sequentialState.nextChapterNum || (downloadedSet.size + 1);
+        skippedCount = downloadedSet.size;
         console.log(chalk.gray(`Resuming from chapter ${chapterNum}...`));
     }
 
-    const skippedCount = downloadedSet.size;
-
     console.log(chalk.white(`Sequential mode: downloading from chapter ${chapterNum}`) +
         (skippedCount > 0 ? chalk.gray(` (${skippedCount} cached)`) : ''));
-    console.log();
 
     const results = {
         downloaded: 0,
@@ -218,29 +215,17 @@ async function downloadNovelSequentialMode(novel, options, downloadedSet) {
     const maxConsecutiveFailures = 5;
 
     while (currentUrl) {
-        // Skip already downloaded chapters by navigating through them
-        if (downloadedSet.has(chapterNum)) {
-            // Need to fetch to get the next URL even if skipping
-            try {
-                const content = await getChapterContent(currentUrl);
-                currentUrl = content.nextChapterUrl;
-                chapterNum++;
-                continue;
-            } catch (err) {
-                log.warn(`Failed to skip chapter ${chapterNum}`, { error: err.message });
-                break;
-            }
-        }
-
         const chapter = {
             number: chapterNum,
             url: currentUrl,
-            title: null // Will be extracted from content
+            title: null
         };
 
-        updateLine(`${createProgressBar(0, 20)} Ch.${chapterNum} | Downloading...`);
+        console.log(`\n[SEQ] Downloading chapter ${chapterNum}: ${currentUrl.slice(0, 80)}...`);
 
         const result = await downloadChapter(novel.title, chapter);
+
+        console.log(`[SEQ] Result: success=${result.success}, nextUrl=${result.nextChapterUrl ? 'yes' : 'NO'}`);
 
         if (result.success) {
             results.downloaded++;
@@ -248,13 +233,29 @@ async function downloadNovelSequentialMode(novel, options, downloadedSet) {
             consecutiveFailures = 0;
             log.download.chapter(chapterNum, result.title, 'SUCCESS');
 
-            // Move to next chapter
-            currentUrl = result.nextChapterUrl;
-            chapterNum++;
+            // Save state with next chapter URL for resume
+            await storage.saveDownloadState(novel.title, {
+                downloadedCount: skippedCount + results.downloaded,
+                failedChapters: results.failedChapters,
+                sequentialState: {
+                    lastChapterNum: chapterNum,
+                    lastChapterUrl: currentUrl,
+                    nextChapterNum: chapterNum + 1,
+                    nextChapterUrl: result.nextChapterUrl
+                },
+                lastUpdated: new Date().toISOString()
+            });
 
             // Update progress display
-            updateLine(`${createProgressBar(100, 20)} Ch.${chapterNum - 1} | ${result.title?.slice(0, 30) || 'Done'}`);
+            updateLine(`${createProgressBar(100, 20)} Ch.${chapterNum} | ${result.title?.slice(0, 30) || 'Done'}`);
             console.log();
+
+            // Move to next chapter
+            if (!result.nextChapterUrl) {
+                console.log(chalk.yellow(`[SEQ] No next chapter URL found after chapter ${chapterNum}`));
+            }
+            currentUrl = result.nextChapterUrl;
+            chapterNum++;
         } else {
             results.failed++;
             consecutiveFailures++;
@@ -265,6 +266,7 @@ async function downloadNovelSequentialMode(novel, options, downloadedSet) {
                 error: result.error
             });
             log.download.chapterFailed(chapterNum, chapter.title, { message: result.error });
+            console.log(chalk.red(`[SEQ] Chapter ${chapterNum} failed: ${result.error}`));
 
             // Stop after too many consecutive failures
             if (consecutiveFailures >= maxConsecutiveFailures) {
@@ -272,9 +274,8 @@ async function downloadNovelSequentialMode(novel, options, downloadedSet) {
                 break;
             }
 
-            // Try to continue despite failure
-            chapterNum++;
-            currentUrl = null; // Can't continue without next URL
+            // Can't continue without next URL from successful download
+            currentUrl = null;
         }
 
         if (onProgress) {
@@ -285,23 +286,18 @@ async function downloadNovelSequentialMode(novel, options, downloadedSet) {
             });
         }
 
-        // Save download state periodically
-        if ((results.downloaded + results.failed) % 10 === 0) {
-            await storage.saveDownloadState(novel.title, {
-                lastChapter: chapterNum - 1,
-                lastChapterUrl: currentUrl,
-                lastChapterNum: chapterNum,
-                downloadedCount: downloadedSet.size + results.downloaded,
-                failedChapters: results.failedChapters,
-                lastUpdated: new Date().toISOString()
-            });
-        }
-
         // Delay between chapters
         if (currentUrl) {
             await new Promise(r => setTimeout(r, DOWNLOAD_CONFIG.delayBetweenChapters));
         }
     }
+
+    // No more chapters - end reached
+    if (!currentUrl && consecutiveFailures === 0) {
+        console.log(chalk.green('\nReached end of available chapters.'));
+    }
+
+    console.log(chalk.gray(`[SEQ] Download complete: ${results.downloaded} downloaded, ${results.failed} failed`));
 
     return { results, skippedCount, startTime };
 }
@@ -324,31 +320,52 @@ export async function downloadNovel(novel, options = {}) {
 
     // Download cover if available
     if (novel.cover) {
+        console.log(chalk.gray(`Downloading cover: ${novel.cover.slice(0, 60)}...`));
         try {
             const coverBuffer = await fetchImage(novel.cover);
             if (coverBuffer) {
                 await storage.saveCover(novel.title, coverBuffer);
+                console.log(chalk.gray('Cover saved.'));
             }
         } catch (err) {
             log.warn('Failed to download cover image', { error: err.message });
         }
     }
 
-    // Get already downloaded chapters
-    const downloadedChapters = skipExisting
-        ? await storage.getDownloadedChapters(novel.title)
-        : [];
+    console.log(chalk.gray('Loading download state...'));
+
+    let downloadedChapters = [];
+    let previousState = null;
+
+    try {
+        // Get already downloaded chapters
+        downloadedChapters = skipExisting
+            ? await storage.getDownloadedChapters(novel.title)
+            : [];
+        console.log(chalk.gray(`Found ${downloadedChapters.length} cached chapters`));
+    } catch (err) {
+        console.log(chalk.yellow(`Warning: Could not load cached chapters: ${err.message}`));
+    }
 
     const downloadedSet = new Set(downloadedChapters);
 
-    // Load previous failed chapters to retry
-    const previousState = await storage.loadDownloadState(novel.title);
+    try {
+        // Load previous failed chapters to retry
+        previousState = await storage.loadDownloadState(novel.title);
+    } catch (err) {
+        console.log(chalk.yellow(`Warning: Could not load download state: ${err.message}`));
+    }
+
     const previouslyFailed = new Set((previousState?.failedChapters || []).map(c => c.number));
+
+    console.log(chalk.cyan(`Mode: ${novel.isSequential ? 'SEQUENTIAL' : 'LIST'}`));
 
     let downloadResult;
 
     if (novel.isSequential) {
-        downloadResult = await downloadNovelSequentialMode(novel, { onProgress, startFrom }, downloadedSet);
+        console.log(chalk.cyan(`First chapter URL: ${novel.firstChapterUrl || 'NOT FOUND'}`));
+        console.log(chalk.gray('Starting sequential download...'));
+        downloadResult = await downloadNovelSequentialMode(novel, { onProgress, startFrom }, downloadedSet, previousState);
     } else {
         downloadResult = await downloadNovelListMode(novel, { onProgress, startFrom }, downloadedSet, previouslyFailed);
     }

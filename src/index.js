@@ -226,6 +226,12 @@ async function downloadScreen() {
         // Get full novel details
         const novelDetails = await getNovelDetails(selectedNovel.url);
 
+        // Use search result title as fallback if details extraction failed
+        if (!novelDetails.title && selectedNovel.title) {
+            novelDetails.title = selectedNovel.title;
+            console.log(chalk.yellow(`Note: Using title from search results`));
+        }
+
         // Display novel info
         const source = getActiveSource();
         const isSequential = source?.chapterList?.mode === 'sequential';
@@ -389,6 +395,10 @@ async function downloadsScreen() {
 
         try {
             const novelDetails = await getNovelDetails(selectedNovel.url);
+            // Use existing title as fallback
+            if (!novelDetails.title && selectedNovel.title) {
+                novelDetails.title = selectedNovel.title;
+            }
             await downloadNovel(novelDetails, { skipExisting: true });
         } catch (err) {
             console.log(chalk.red(`Error: ${err.message}`));

@@ -1,5 +1,5 @@
 {
-  "detailedLogs": false,
+  "detailedLogs": true,
   "delayBetweenChapters": 400,
-  "activeSourceId": "novelbin.me"
+  "activeSourceId": "novelbin.com"
 }
