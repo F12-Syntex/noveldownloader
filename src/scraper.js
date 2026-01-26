@@ -13,7 +13,8 @@ import {
     getActiveSource,
     buildUrl,
     getHttpConfig,
-    ensureAbsoluteUrl
+    ensureAbsoluteUrl,
+    applyUrlRewrites
 } from './sourceManager.js';
 
 // Add stealth plugin to puppeteer-extra
@@ -529,7 +530,7 @@ function parseChaptersFromPage($, source) {
         const $a = $(el);
         let chUrl = $a.attr(chapterConfig.fields.url.attribute || 'href');
         if (!chUrl) return;
-        chUrl = ensureAbsoluteUrl(chUrl, source.baseUrl);
+        chUrl = ensureAbsoluteUrl(chUrl, source.baseUrl, source);
 
         // Get title from configured attribute with fallback
         let chTitle = $a.attr(chapterConfig.fields.title.attribute);
@@ -674,13 +675,12 @@ export async function getNovelDetails(novelUrl, source = null) {
         for (const selector of selectors) {
             const firstChapterEl = $(selector).first();
             const href = firstChapterEl.attr('href');
-            console.log(`[DEBUG] Trying selector "${selector}": found=${firstChapterEl.length > 0}, href="${href}"`);
             if (href && href !== '#' && !href.startsWith('javascript:')) {
-                firstChapterUrl = ensureAbsoluteUrl(href, source.baseUrl);
+                firstChapterUrl = ensureAbsoluteUrl(href, source.baseUrl, source);
+                log.debug(`Found first chapter with selector "${selector}": ${firstChapterUrl}`);
                 break;
             }
         }
-        console.log(`[DEBUG] First chapter URL: ${firstChapterUrl}`);
     } else {
         // List mode: get all chapters upfront
         const totalPages = getTotalPages($, source);
@@ -738,10 +738,6 @@ export async function getNovelDetails(novelUrl, source = null) {
 
         log.debug(`Total unique chapters: ${uniqueChapters.length}`);
     }
-
-    // Debug: log what we extracted
-    console.log(`[DEBUG] Extracted title: "${details.title}"`);
-    console.log(`[DEBUG] First chapter URL: "${firstChapterUrl}"`);
 
     return {
         title: details.title,
@@ -823,9 +819,6 @@ export async function getChapterContent(chapterUrl, source = null) {
             const isDisabled = nextEl.hasClass('disabled') || nextEl.attr('disabled');
             const hasNoClass = nextEl.hasClass('ismark'); // Some sites use this to mark unavailable
 
-            // Visible logging for debugging
-            console.log(`  [NAV] Next button: found=${nextEl.length > 0}, href="${nextHref}", disabled=${isDisabled}`);
-
             // Check for valid URL
             const isValidHref = nextHref &&
                 nextHref !== '#' &&
@@ -835,10 +828,7 @@ export async function getChapterContent(chapterUrl, source = null) {
                 nextHref !== chapterUrl; // Not self-referencing
 
             if (isValidHref && !isDisabled && !hasNoClass) {
-                nextChapterUrl = ensureAbsoluteUrl(nextHref, source.baseUrl);
-                console.log(`  [NAV] Next URL: ${nextChapterUrl}`);
-            } else if (nextEl.length > 0) {
-                console.log(`  [NAV] Next button exists but invalid: href="${nextHref}", disabled=${isDisabled}, valid=${isValidHref}`);
+                nextChapterUrl = ensureAbsoluteUrl(nextHref, source.baseUrl, source);
             }
         }
 
@@ -847,7 +837,7 @@ export async function getChapterContent(chapterUrl, source = null) {
             const prevHref = prevEl.attr('href');
             if (prevHref && prevHref !== '#' && !prevHref.startsWith('javascript:') &&
                 !prevEl.hasClass('disabled') && !prevEl.attr('disabled')) {
-                prevChapterUrl = ensureAbsoluteUrl(prevHref, source.baseUrl);
+                prevChapterUrl = ensureAbsoluteUrl(prevHref, source.baseUrl, source);
             }
         }
     }

@@ -34,6 +34,24 @@
             "default": "novel",
             "description": "Type of content this source provides"
         },
+        "urlRewrites": {
+            "type": "array",
+            "description": "URL rewrite rules to normalize URLs from different domains",
+            "items": {
+                "type": "object",
+                "required": ["from", "to"],
+                "properties": {
+                    "from": {
+                        "type": "string",
+                        "description": "Pattern to match in URLs"
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "Replacement string"
+                    }
+                }
+            }
+        },
         "http": {
             "type": "object",
             "description": "HTTP request configuration",

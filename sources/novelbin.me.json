@@ -1,11 +1,16 @@
 {
     "$schema": "./source_schema.json",
     "name": "NovelBin",
-    "id": "novelbin.com",
-    "baseUrl": "https://novelbin.com",
+    "id": "novelbin.me",
+    "baseUrl": "https://novelbin.me",
     "enabled": true,
-    "version": "1.0.0",
+    "version": "1.1.0",
     "contentType": "novel",
+    "urlRewrites": [
+        { "from": "novelbin.com/b/", "to": "novelbin.me/novel-book/" },
+        { "from": "novelbin.net/b/", "to": "novelbin.me/novel-book/" },
+        { "from": "http://", "to": "https://" }
+    ],
     "http": {
         "timeout": 60000,
         "retryAttempts": 3,
@@ -84,10 +89,9 @@
         }
     },
     "chapterList": {
-        "mode": "sequential",
-        "firstChapterSelector": "div#list-chapter ul.list-chapter li:first-child a, ul.list-chapter li:first-child a, .chapter-list a:first-child, a[href*='chapter-1'], a[href*='/chapter/1']",
-        "chapterListTabSelector": "a#tab-chapters-title, .tab-chapters",
-        "containerSelector": "div#list-chapter ul.list-chapter li a, ul.list-chapter li a",
+        "mode": "list",
+        "chapterListTabSelector": "a#tab-chapters-title",
+        "containerSelector": "div#list-chapter ul.list-chapter li a",
         "fields": {
             "title": {
                 "attribute": "title",

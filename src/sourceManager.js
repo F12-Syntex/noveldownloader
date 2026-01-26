@@ -199,10 +199,31 @@ export function getHttpConfig(source) {
 }
 
 /**
- * Ensure a URL is absolute
+ * Apply URL rewrites from source configuration
  */
-export function ensureAbsoluteUrl(url, baseUrl) {
+export function applyUrlRewrites(url, source) {
+    if (!url || !source?.urlRewrites) return url;
+
+    let result = url;
+    for (const rule of source.urlRewrites) {
+        if (result.includes(rule.from)) {
+            result = result.replace(rule.from, rule.to);
+        }
+    }
+    return result;
+}
+
+/**
+ * Ensure a URL is absolute and apply rewrites
+ */
+export function ensureAbsoluteUrl(url, baseUrl, source = null) {
     if (!url) return url;
+
+    // Apply URL rewrites if source is provided
+    if (source) {
+        url = applyUrlRewrites(url, source);
+    }
+
     if (url.startsWith('http://') || url.startsWith('https://')) {
         return url;
     }
