@@ -5,6 +5,7 @@
 
 import * as cheerio from 'cheerio';
 import fetch from 'node-fetch';
+import puppeteer from 'puppeteer';
 import { log } from './logger.js';
 import {
     getActiveSource,
@@ -13,10 +14,81 @@ import {
     ensureAbsoluteUrl
 } from './sourceManager.js';
 
+// Shared browser instance for Puppeteer
+let browserInstance = null;
+
 /**
- * Fetch a page with retry logic
+ * Get or create browser instance
  */
-async function fetchPage(url, source, attempt = 1) {
+async function getBrowser() {
+    if (!browserInstance) {
+        log.debug('Starting headless browser...');
+        browserInstance = await puppeteer.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+        });
+    }
+    return browserInstance;
+}
+
+/**
+ * Close browser instance
+ */
+export async function closeBrowser() {
+    if (browserInstance) {
+        await browserInstance.close();
+        browserInstance = null;
+    }
+}
+
+/**
+ * Fetch a page using Puppeteer (for anti-bot sites)
+ */
+async function fetchPageWithPuppeteer(url, source, attempt = 1) {
+    const config = getHttpConfig(source);
+    const jsWaitTime = source.http?.jsWaitTime || 2000;
+
+    try {
+        log.debug(`Fetching with browser: ${url}`, { attempt });
+
+        const browser = await getBrowser();
+        const page = await browser.newPage();
+
+        try {
+            await page.setUserAgent(config.userAgent);
+            await page.setRequestInterception(true);
+            page.on('request', r => {
+                if (['image', 'font', 'media'].includes(r.resourceType())) {
+                    r.abort();
+                } else {
+                    r.continue();
+                }
+            });
+
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: config.timeout });
+            await new Promise(r => setTimeout(r, jsWaitTime));
+
+            const html = await page.content();
+            return html;
+        } finally {
+            await page.close();
+        }
+    } catch (error) {
+        if (attempt < config.retryAttempts) {
+            log.warn(`Browser fetch attempt ${attempt} failed, retrying...`, { url, error: error.message });
+            await new Promise(r => setTimeout(r, config.retryDelay * attempt));
+            return fetchPageWithPuppeteer(url, source, attempt + 1);
+        }
+
+        log.error(`Failed to fetch after ${attempt} attempts`, { url, error: error.message });
+        throw error;
+    }
+}
+
+/**
+ * Fetch a page with retry logic (standard fetch)
+ */
+async function fetchPageWithFetch(url, source, attempt = 1) {
     const config = getHttpConfig(source);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), config.timeout);
@@ -44,12 +116,22 @@ async function fetchPage(url, source, attempt = 1) {
         if (attempt < config.retryAttempts) {
             log.warn(`Fetch attempt ${attempt} failed, retrying...`, { url, error: error.message });
             await new Promise(r => setTimeout(r, config.retryDelay * attempt));
-            return fetchPage(url, source, attempt + 1);
+            return fetchPageWithFetch(url, source, attempt + 1);
         }
 
         log.error(`Failed to fetch after ${attempt} attempts`, { url, error: error.message });
         throw error;
     }
+}
+
+/**
+ * Fetch a page - uses Puppeteer or fetch based on source config
+ */
+async function fetchPage(url, source, attempt = 1) {
+    if (source.http?.usePuppeteer) {
+        return fetchPageWithPuppeteer(url, source, attempt);
+    }
+    return fetchPageWithFetch(url, source, attempt);
 }
 
 /**
@@ -332,59 +414,77 @@ export async function getNovelDetails(novelUrl, source = null) {
         details.cover = ensureAbsoluteUrl(details.cover, source.baseUrl);
     }
 
-    // Get total pages
-    const totalPages = getTotalPages($, source);
-    log.debug(`Found ${totalPages} page(s) of chapters`);
+    const chapterListConfig = source.chapterList;
+    const isSequential = chapterListConfig.mode === 'sequential';
 
-    // Get chapters from first page
-    let allChapters = parseChaptersFromPage($, source);
-    log.debug(`Page 1: ${allChapters.length} chapters`);
+    let uniqueChapters = [];
+    let firstChapterUrl = null;
 
-    // Fetch remaining pages
-    const config = getHttpConfig(source);
-    const pagination = source.chapterList.pagination;
+    if (isSequential) {
+        // Sequential mode: just get the first chapter URL
+        const firstChapterEl = $(chapterListConfig.firstChapterSelector).first();
+        firstChapterUrl = firstChapterEl.attr('href');
+        if (firstChapterUrl) {
+            firstChapterUrl = ensureAbsoluteUrl(firstChapterUrl, source.baseUrl);
+        }
+        log.debug(`Sequential mode: first chapter URL: ${firstChapterUrl}`);
+    } else {
+        // List mode: get all chapters upfront
+        const totalPages = getTotalPages($, source);
+        log.debug(`Found ${totalPages} page(s) of chapters`);
 
-    for (let page = 2; page <= totalPages; page++) {
-        let pageUrl;
-        if (pagination.type === 'query') {
-            const separator = novelUrl.includes('?') ? '&' : '?';
-            pageUrl = `${novelUrl}${separator}${pagination.param}=${page}`;
-        } else {
-            pageUrl = `${novelUrl}/${page}`;
+        // Get chapters from first page
+        let allChapters = parseChaptersFromPage($, source);
+        log.debug(`Page 1: ${allChapters.length} chapters`);
+
+        // Fetch remaining pages
+        const config = getHttpConfig(source);
+        const pagination = chapterListConfig.pagination;
+
+        if (pagination) {
+            for (let page = 2; page <= totalPages; page++) {
+                let pageUrl;
+                if (pagination.type === 'query') {
+                    const separator = novelUrl.includes('?') ? '&' : '?';
+                    pageUrl = `${novelUrl}${separator}${pagination.param}=${page}`;
+                } else {
+                    pageUrl = `${novelUrl}/${page}`;
+                }
+
+                try {
+                    await new Promise(r => setTimeout(r, config.rateLimit));
+                    const pageHtml = await fetchPage(pageUrl, source);
+                    const $page = cheerio.load(pageHtml);
+                    const pageChapters = parseChaptersFromPage($page, source);
+                    allChapters = allChapters.concat(pageChapters);
+                    log.debug(`Page ${page}: ${pageChapters.length} chapters`);
+                } catch (err) {
+                    log.warn(`Page ${page} failed: ${err.message}`);
+                }
+            }
         }
 
-        try {
-            await new Promise(r => setTimeout(r, config.rateLimit));
-            const pageHtml = await fetchPage(pageUrl, source);
-            const $page = cheerio.load(pageHtml);
-            const pageChapters = parseChaptersFromPage($page, source);
-            allChapters = allChapters.concat(pageChapters);
-            log.debug(`Page ${page}: ${pageChapters.length} chapters`);
-        } catch (err) {
-            log.warn(`Page ${page} failed: ${err.message}`);
-        }
+        // Deduplicate by URL
+        const seen = new Set();
+        uniqueChapters = allChapters.filter(ch => {
+            if (seen.has(ch.url)) return false;
+            seen.add(ch.url);
+            return true;
+        });
+
+        // Sort by chapter number
+        uniqueChapters.sort((a, b) => {
+            if (a.number !== null && b.number !== null) return a.number - b.number;
+            return 0;
+        });
+
+        // Assign sequential numbers if missing
+        uniqueChapters.forEach((ch, idx) => {
+            if (ch.number === null) ch.number = idx + 1;
+        });
+
+        log.debug(`Total unique chapters: ${uniqueChapters.length}`);
     }
-
-    // Deduplicate by URL
-    const seen = new Set();
-    const uniqueChapters = allChapters.filter(ch => {
-        if (seen.has(ch.url)) return false;
-        seen.add(ch.url);
-        return true;
-    });
-
-    // Sort by chapter number
-    uniqueChapters.sort((a, b) => {
-        if (a.number !== null && b.number !== null) return a.number - b.number;
-        return 0;
-    });
-
-    // Assign sequential numbers if missing
-    uniqueChapters.forEach((ch, idx) => {
-        if (ch.number === null) ch.number = idx + 1;
-    });
-
-    log.debug(`Total unique chapters: ${uniqueChapters.length}`);
 
     return {
         title: details.title,
@@ -397,7 +497,9 @@ export async function getNovelDetails(novelUrl, source = null) {
         rating,
         source: source.name,
         sourceId: source.id,
-        totalChapters: uniqueChapters.length,
+        isSequential,
+        firstChapterUrl,
+        totalChapters: isSequential ? null : uniqueChapters.length,
         chapters: uniqueChapters,
         fetchedAt: new Date().toISOString()
     };
@@ -451,10 +553,36 @@ export async function getChapterContent(chapterUrl, source = null) {
         content = contentEl.text().trim();
     }
 
+    // Get navigation URLs for sequential mode
+    let nextChapterUrl = null;
+    let prevChapterUrl = null;
+
+    if (contentConfig.navigation) {
+        const nav = contentConfig.navigation;
+
+        if (nav.nextSelector) {
+            const nextEl = $(nav.nextSelector).first();
+            const nextHref = nextEl.attr('href');
+            if (nextHref && !nextEl.hasClass('disabled') && !nextEl.attr('disabled')) {
+                nextChapterUrl = ensureAbsoluteUrl(nextHref, source.baseUrl);
+            }
+        }
+
+        if (nav.prevSelector) {
+            const prevEl = $(nav.prevSelector).first();
+            const prevHref = prevEl.attr('href');
+            if (prevHref && !prevEl.hasClass('disabled') && !prevEl.attr('disabled')) {
+                prevChapterUrl = ensureAbsoluteUrl(prevHref, source.baseUrl);
+            }
+        }
+    }
+
     return {
         title,
         content,
         wordCount: content.split(/\s+/).length,
+        nextChapterUrl,
+        prevChapterUrl,
     };
 }
 

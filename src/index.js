@@ -7,7 +7,7 @@
 
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { searchNovels, getNovelDetails } from './scraper.js';
+import { searchNovels, getNovelDetails, closeBrowser } from './scraper.js';
 import { downloadNovel, retryFailedChapters, getDownloadProgress } from './downloader.js';
 import {
     exportToEpub, exportToPdf, exportToDocx, exportToOdt,
@@ -739,17 +739,20 @@ async function main() {
 
     console.log(chalk.cyan('\nGoodbye! Happy reading!\n'));
     log.info('Application exited');
+    await closeBrowser();
     process.exit(0);
 }
 
 // Handle Ctrl+C gracefully
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
     console.log(chalk.cyan('\n\nGoodbye! Happy reading!\n'));
+    await closeBrowser();
     process.exit(0);
 });
 
 // Run the application
-main().catch(error => {
+main().catch(async error => {
     console.error(chalk.red('Fatal error:'), error);
+    await closeBrowser();
     process.exit(1);
 });
