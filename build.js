@@ -101,6 +101,12 @@ async function build() {
                             namespace: 'stub'
                         }));
 
+                        // Stub typescript - cosmiconfig optionally uses it for TS config files
+                        build.onResolve({ filter: /^typescript$/ }, () => ({
+                            path: 'typescript',
+                            namespace: 'stub'
+                        }));
+
                         // Return empty module for stubs
                         build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
                             contents: 'module.exports = {};',
